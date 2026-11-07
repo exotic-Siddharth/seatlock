@@ -6,13 +6,28 @@ import { Button, Input } from '../components/ui';
 import { ApiError, errorMessage } from '../lib/api';
 import { useAuth } from '../lib/auth';
 
+const isControlOrBackslash = (c: string) => c.charCodeAt(0) < 0x20 || c === '\u007f' || c === '\\';
+
 /**
  * Where to go after signing in: `next` if it is a path on this site, else "/".
- * "//evil.example" and "/\evil.example" start with "/" but browsers read them as other hosts.
+ *
+ * Checking the prefix is not enough. Browsers read "\" as "/" and silently drop tab, CR and LF,
+ * so "/\evil.example" and "/<tab>/evil.example" both become "//evil.example", another host
+ * (and React Router falls back to a full page load when pushState refuses a cross-origin URL).
+ * So the path is also rejected if, even after percent-decoding, it holds a control character
+ * or a backslash, or starts with "//"; what remains must resolve to this origin.
  */
 export function safeNext(raw: string | null): string {
-  if (!raw || !raw.startsWith('/') || raw.startsWith('//') || raw.startsWith('/\\')) return '/';
-  return raw;
+  if (!raw?.startsWith('/')) return '/';
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    return '/'; // malformed percent-encoding
+  }
+  if (decoded.startsWith('//') || [...decoded].some(isControlOrBackslash)) return '/';
+  const url = new URL(raw, window.location.origin);
+  return url.origin === window.location.origin ? url.pathname + url.search + url.hash : '/';
 }
 
 /** "?next=..." to carry the destination over to the other auth page. */

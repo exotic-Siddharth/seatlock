@@ -32,12 +32,31 @@ const location = () => screen.getByTestId('location').textContent;
 afterEach(() => vi.unstubAllGlobals());
 
 describe('safeNext', () => {
-  it('accepts same-site paths only', () => {
+  it('accepts same-site paths', () => {
     expect(safeNext('/tickets')).toBe('/tickets');
     expect(safeNext('/events/x?y=1')).toBe('/events/x?y=1');
-    for (const unsafe of [null, '', 'tickets', '//evil.example', '/\\evil.example', 'https://evil.example', 'javascript:alert(1)']) {
-      expect(safeNext(unsafe)).toBe('/');
-    }
+    expect(safeNext('/orders/abc#tickets')).toBe('/orders/abc#tickets');
+  });
+
+  it.each([
+    ['nothing', null],
+    ['an empty string', ''],
+    ['a relative path', 'tickets'],
+    ['a protocol-relative URL', '//evil.example'],
+    ['a backslash', '/\\evil.example'],
+    ['an absolute URL', 'https://evil.example'],
+    ['a javascript: URL', 'javascript:alert(1)'],
+    // Browsers drop tab, CR and LF from URLs, which turns these into //evil.example.
+    ['a tab', '/\t/evil.example'],
+    ['a newline', '/\n/evil.example'],
+    ['a carriage return', '/\r/evil.example'],
+    ['another control character', '/\u0000/evil.example'],
+    ['an encoded tab', '/%09/evil.example'],
+    ['an encoded slash', '/%2F/evil.example'],
+    ['an encoded backslash', '/%5C/evil.example'],
+    ['malformed percent-encoding', '/%E0%A4%A'],
+  ])('rejects %s', (_, unsafe) => {
+    expect(safeNext(unsafe)).toBe('/');
   });
 });
 
@@ -56,6 +75,15 @@ describe('Login', () => {
   it('ignores a next that points off-site', async () => {
     mockApi({ 'POST /api/auth/login': [200, { user: FAN }] });
     const user = renderAt('/login?next=%2F%2Fevil.example');
+    await user.type(screen.getByLabelText('Email'), 'fan@test.dev');
+    await user.type(screen.getByLabelText('Password'), 'correct horse');
+    await user.click(screen.getByRole('button', { name: 'Log in' }));
+    await waitFor(() => expect(location()).toBe('/'));
+  });
+
+  it('stays on the site when next hides a tab', async () => {
+    mockApi({ 'POST /api/auth/login': [200, { user: FAN }] });
+    const user = renderAt(`/login?next=${encodeURIComponent('/\t/evil.example')}`);
     await user.type(screen.getByLabelText('Email'), 'fan@test.dev');
     await user.type(screen.getByLabelText('Password'), 'correct horse');
     await user.click(screen.getByRole('button', { name: 'Log in' }));

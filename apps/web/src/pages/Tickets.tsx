@@ -25,7 +25,7 @@ export default function Tickets() {
           <Skeleton className="h-56 rounded-2xl" />
           <Skeleton className="h-56 rounded-2xl" />
         </div>
-      ) : orders.isError ? (
+      ) : orders.isLoadingError ? (
         <LoadError error={orders.error} onRetry={() => void orders.refetch()} title="Could not load your tickets" />
       ) : orders.data.length === 0 ? (
         <EmptyState

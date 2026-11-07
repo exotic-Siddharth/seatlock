@@ -1,6 +1,6 @@
 import type { EventDetail, QueueStatus } from '@seatlock/shared';
 import { useQueryClient } from '@tanstack/react-query';
-import { CalendarDays, CircleCheck, Clock, Hourglass, MapPin, Ticket, Users } from 'lucide-react';
+import { CalendarDays, CircleCheck, Clock, Hourglass, MapPin, Ticket, Users, WifiOff } from 'lucide-react';
 import { useMemo, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router';
 import { Poster } from '../components/layout/Poster';
@@ -33,7 +33,7 @@ export default function EventPage() {
   const detail = useEventDetail(slug);
 
   if (detail.isPending) return <EventSkeleton />;
-  if (detail.isError) {
+  if (detail.isLoadingError) {
     return (
       <LoadError
         error={detail.error}
@@ -117,7 +117,7 @@ function SeatsOrWaitingRoom({ event, clock }: { event: EventDetail; clock: Serve
   if (!queued) return <SeatPicker event={event} clock={clock} />;
   if (!user) return <WaitingRoom eventId={event.id} queue={null} saleOpensAt={event.saleOpensAt} clock={clock} onRefresh={refreshEvent} />;
   if (queue.isPending) return <MapSkeleton label="Checking your place in line" />;
-  if (queue.isError) return <LoadError error={queue.error} onRetry={() => void queue.refetch()} title="Could not reach the waiting room" />;
+  if (queue.isLoadingError) return <LoadError error={queue.error} onRetry={() => void queue.refetch()} title="Could not reach the waiting room" />;
 
   const status = queue.data;
   if (status.state === 'not_required' || status.state === 'admitted') {
@@ -167,7 +167,7 @@ function SeatPicker({ event, clock, access }: { event: EventDetail; clock: Serve
   }, [myHold, seats]);
 
   if (snapshot.isPending) return <MapSkeleton label="Loading the seat map" />;
-  if (snapshot.isError) {
+  if (snapshot.isLoadingError) {
     return <LoadError error={snapshot.error} onRetry={() => void snapshot.refetch()} title="Could not load the seat map" />;
   }
 
@@ -281,6 +281,20 @@ function SeatPicker({ event, clock, access }: { event: EventDetail; clock: Serve
           >
             <Countdown target={myHold.expiresAt} clock={clock} label="Time left on your hold" onDone={refreshSeats} className="font-semibold text-ink" />{' '}
             left to pay. Holding new seats releases these.
+          </Notice>
+        )}
+        {snapshot.isRefetchError && (
+          <Notice
+            tone="warning"
+            icon={<WifiOff aria-hidden />}
+            title="Could not refresh the seats"
+            action={
+              <Button variant="secondary" size="sm" loading={snapshot.isFetching} onClick={() => void snapshot.refetch()}>
+                Try again
+              </Button>
+            }
+          >
+            The map shows the seats as we last saw them. It catches up when the connection is back.
           </Notice>
         )}
         <SaleNotice event={event} clock={clock} counts={counts} />

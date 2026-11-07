@@ -165,7 +165,7 @@ function Events() {
             <Skeleton key={i} className="h-96 rounded-2xl" />
           ))}
         </div>
-      ) : events.isError ? (
+      ) : events.isLoadingError ? (
         <LoadError error={events.error} onRetry={() => void events.refetch()} title="Could not load events" />
       ) : events.data.length === 0 ? (
         <EmptyState

@@ -21,7 +21,7 @@ export default function Checkout() {
   const hold = useHold(holdId);
 
   if (hold.isPending) return <CheckoutSkeleton />;
-  if (hold.isError) {
+  if (hold.isLoadingError) {
     return (
       <LoadError
         error={hold.error}
