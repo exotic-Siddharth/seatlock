@@ -57,6 +57,20 @@ describe('metrics endpoint', () => {
       expect(res.text).toContain(name);
     }
   });
+
+  it('labels request durations with the route pattern, not the raw URL', async () => {
+    const fresh = await makeCtx();
+    await request(fresh.app).get('/healthz');
+    await request(fresh.app).get('/api/holds/0b6f4b5e-5d4a-4bb3-9a4c-6f1f7c2a9e10');
+    await request(fresh.app).post('/api/holds').send({});
+    await request(fresh.app).get('/api/no-such-route');
+    const res = await request(fresh.app).get('/metrics').set('Authorization', `Bearer ${fresh.deps.config.metricsToken}`);
+    await fresh.close();
+
+    const counts = res.text.matchAll(/seatlock_http_request_duration_seconds_count\{[^}]*route="([^"]+)"/g);
+    const routes = [...new Set([...counts].map((m) => m[1]))].sort();
+    expect(routes).toEqual(['/api/holds', '/api/holds/:id', '/healthz', 'unmatched']);
+  });
 });
 
 describe('error shape', () => {

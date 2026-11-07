@@ -1,4 +1,4 @@
-import type { Request, RequestHandler } from 'express';
+import type { Request, RequestHandler, Response } from 'express';
 import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
 
 export type Metrics = {
@@ -60,16 +60,28 @@ export function createMetrics(): Metrics {
   };
 }
 
+/**
+ * Put in front of a mounted router. Express resets `req.baseUrl` when an error leaves the
+ * router, before the response finishes, so the mount path is kept for routeLabel here.
+ */
+export const rememberMountPath: RequestHandler = (req, res, next) => {
+  res.locals.mountPath = req.baseUrl;
+  next();
+};
+
 /** The matched route pattern (e.g. /api/holds/:id), never the raw URL, to keep label cardinality low. */
-function routeLabel(req: Request): string {
+function routeLabel(req: Request, res: Response): string {
   const path: unknown = req.route?.path;
-  return typeof path === 'string' ? `${req.baseUrl}${path}` : 'unmatched';
+  if (typeof path !== 'string') return 'unmatched';
+  const mountPath: unknown = res.locals.mountPath;
+  const base = typeof mountPath === 'string' ? mountPath : req.baseUrl;
+  return `${base}${path}`.replace(/(.)\/$/, '$1'); // "/api/holds/" -> "/api/holds"
 }
 
 export function httpMetrics(metrics: Metrics): RequestHandler {
   return (req, res, next) => {
     const end = metrics.httpDuration.startTimer();
-    res.on('finish', () => end({ method: req.method, route: routeLabel(req), status: String(res.statusCode) }));
+    res.on('finish', () => end({ method: req.method, route: routeLabel(req, res), status: String(res.statusCode) }));
     next();
   };
 }
