@@ -17,7 +17,8 @@
     "test": "npm test --workspaces --if-present",
     "lint": "eslint .",
     "db:migrate": "npm run db:migrate -w @seatlock/api",
-    "seed": "npm run seed -w @seatlock/api"
+    "seed": "npm run seed -w @seatlock/api",
+    "test:e2e": "npm run e2e -w @seatlock/web"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
