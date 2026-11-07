@@ -2,9 +2,10 @@ import { HoldSchema } from '@seatlock/shared';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { seatKey } from '../../src/booking/strategies/redis';
+import { sweepOnce } from '../../src/booking/sweeper';
 import { signQueueToken } from '../../src/queue/token';
 import { createOnSaleEvent, createUser, makeCtx, resetState, type TestCtx } from '../helpers';
-import { holdStatus, postHold, postOrder, seatRows, type Bearer } from './fixtures';
+import { expireHold, holdStatus, postHold, postOrder, seatRows, type Bearer } from './fixtures';
 
 let ctx: TestCtx;
 let alice: { user: { id: string }; bearer: Bearer };
@@ -305,6 +306,21 @@ describe('DELETE /api/holds/:id', () => {
 
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('CHECKOUT_IN_PROGRESS');
+  });
+
+  it('answers 204 for a hold the sweeper has already expired, even if its order never got paid', async () => {
+    const { eventId, seatIds } = await createOnSaleEvent(ctx);
+    const created = await postHold(ctx, alice.bearer, eventId, [seatIds[0]!]);
+    const id = created.body.hold.id as string;
+    await postOrder(ctx, alice.bearer, id);
+    await expireHold(ctx, id);
+    await sweepOnce(ctx.deps);
+    expect(await holdStatus(ctx, id)).toBe('expired');
+
+    const res = await request(ctx.app).delete(`/api/holds/${id}`).set(alice.bearer);
+
+    expect(res.status).toBe(204);
+    expect(await holdStatus(ctx, id)).toBe('expired');
   });
 });
 

@@ -63,11 +63,19 @@ export async function createOrder(
         RETURNING expires_at AS "expiresAt"`,
       [req.holdId],
     );
-    await c.query(
+    const kept = await c.query(
       `UPDATE event_seats SET held_until = (SELECT expires_at FROM holds WHERE id = $1), updated_at = now()
-        WHERE hold_id = $1 AND status = 'held'`,
+        WHERE hold_id = $1 AND status = 'held'
+        RETURNING id`,
       [req.holdId],
     );
+    // The lapse check above used the transaction's start time; a buyer who took over a seat at
+    // the expiry boundary may have won it since. Throwing rolls back the order, intent and
+    // extension. Naive holds are exempt: their lost seats must reach payment, where the UNIQUE
+    // ticket constraint turns the double promise into SEAT_ALREADY_SOLD (spec §7.2).
+    if (hold.strategy !== 'naive' && kept.rowCount !== hold.seatIds.length) {
+      throw new AppError('HOLD_EXPIRED', 'Your hold on these seats has expired');
+    }
     return { orderId: order.id, extended: { ...hold, expiresAt: ext[0]!.expiresAt } };
   });
 

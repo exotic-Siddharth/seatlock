@@ -107,6 +107,27 @@ describe('POST /api/orders', () => {
     expect(await orderRows(holdId)).toHaveLength(0);
   });
 
+  it('answers 410 HOLD_EXPIRED, and changes nothing, when the hold has already lost a seat', async () => {
+    const { eventId, seatIds } = await createOnSaleEvent(ctx);
+    const [a, b, c] = seatIds as [number, number, number];
+    const mine = await postHold(ctx, alice.bearer, eventId, [a, b]);
+    const theirs = await postHold(ctx, bob.bearer, eventId, [c]);
+    const holdId = mine.body.hold.id as string;
+    // A takeover that won seat b at the expiry boundary, after this order's expiry check began.
+    await ctx.deps.db.query(
+      `UPDATE event_seats SET hold_id = $1, held_until = (SELECT expires_at FROM holds WHERE id = $1) WHERE id = $2`,
+      [theirs.body.hold.id, b],
+    );
+
+    const res = await postOrder(ctx, alice.bearer, holdId);
+
+    expect(res.status).toBe(410);
+    expect(res.body.error.code).toBe('HOLD_EXPIRED');
+    expect(await orderRows(holdId)).toHaveLength(0);
+    const { rows } = await ctx.deps.db.query<{ expires_at: Date }>('SELECT expires_at FROM holds WHERE id = $1', [holdId]);
+    expect(rows[0]!.expires_at.toISOString()).toBe(mine.body.hold.expiresAt);
+  });
+
   it('answers 409 HOLD_NOT_ACTIVE for a released hold and 404 for a stranger', async () => {
     const { holdId } = await newHold();
     const stranger = await postOrder(ctx, bob.bearer, holdId);

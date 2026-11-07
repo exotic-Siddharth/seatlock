@@ -33,8 +33,8 @@ export async function applyPaymentEvent(deps: AppDeps, event: PaymentEvent): Pro
     ]);
     if (fresh.rowCount === 0) return null; // a redelivery of an event already applied
 
-    // The hold is locked with the order, so this takes locks in the same order as the sweeper
-    // and order creation (hold, then its seats) and can't deadlock with them.
+    // The hold is locked with the order, before any seat: the sweeper (which skips locked holds)
+    // and order creation (which locks the hold first) then wait for this transaction or pass it by.
     const { rows } = await c.query<PayingOrder>(
       `SELECT o.id, o.user_id AS "userId", o.event_id AS "eventId", o.hold_id AS "holdId", o.status,
               h.seat_ids AS "seatIds", h.strategy
@@ -85,7 +85,7 @@ async function sell(c: pg.PoolClient, order: PayingOrder, intentId: string): Pro
   }
 
   await c.query(`UPDATE orders SET status = 'paid', paid_at = now(), failure_reason = NULL WHERE id = $1`, [order.id]);
-  await c.query(`UPDATE holds SET status = 'converted', ended_at = now() WHERE id = $1`, [order.holdId]);
+  await c.query(`UPDATE holds SET status = 'converted', ended_at = clock_timestamp() WHERE id = $1`, [order.holdId]);
   await c.query(`UPDATE payment_intents SET status = 'succeeded', failure_code = NULL, updated_at = now() WHERE id = $1`, [
     intentId,
   ]);

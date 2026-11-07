@@ -3,7 +3,7 @@ import { getStrategy } from '../../src/booking/strategies';
 import { seatKey } from '../../src/booking/strategies/redis';
 import { startSweeper, sweepOnce } from '../../src/booking/sweeper';
 import { createOnSaleEvent, createUser, makeCtx, resetState, type TestCtx } from '../helpers';
-import { expireHold, holdStatus, postHold, postOrder, seatRows, waitFor, type Bearer } from './fixtures';
+import { expireHold, holdStatus, postHold, postOrder, seatRows, sendWebhook, waitFor, type Bearer } from './fixtures';
 
 let ctx: TestCtx;
 let alice: { user: { id: string }; bearer: Bearer };
@@ -19,6 +19,29 @@ afterAll(() => ctx.close());
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+/**
+ * Orders the hold, then lets it lapse with the timestamps the app produces: an order extends
+ * its hold to at least created_at + 120 s, so by the time the hold lapses the order is 120 s old.
+ */
+async function lapsedWithOrder(holdId: string) {
+  const order = await postOrder(ctx, alice.bearer, holdId);
+  await expireHold(ctx, holdId, 10);
+  await ctx.deps.db.query(
+    `UPDATE orders o SET created_at = h.expires_at - interval '120 seconds' FROM holds h WHERE h.id = o.hold_id AND o.id = $1`,
+    [order.body.order.id],
+  );
+  return { orderId: order.body.order.id as string, intentId: order.body.payment.intentId as string };
+}
+
+/** What MockPay's confirm records: an attempt in flight since `secondsAgo`. */
+async function startPayment(orderId: string, secondsAgo: number) {
+  await ctx.deps.db.query(
+    `UPDATE payment_intents SET status = 'processing', attempts = attempts + 1, updated_at = now() - make_interval(secs => $2)
+      WHERE order_id = $1`,
+    [orderId, secondsAgo],
+  );
+}
 
 async function heldHold(seatCount = 2, bearer: Bearer = alice.bearer) {
   const { eventId, seatIds } = await createOnSaleEvent(ctx);
@@ -49,21 +72,42 @@ describe('sweepOnce', () => {
     expect((await seatRows(ctx, seats))[0]!.status).toBe('held');
   });
 
-  it('skips a hold whose pending order is younger than 60 s', async () => {
+  it('skips a lapsed hold while its payment is processing, for up to 60 s', async () => {
     const { seats, holdId } = await heldHold(1);
-    const order = await postOrder(ctx, alice.bearer, holdId);
-    await expireHold(ctx, holdId, 10);
+    const { orderId } = await lapsedWithOrder(holdId);
+    await startPayment(orderId, 0);
 
     await sweepOnce(ctx.deps);
     const whilePaying = { hold: await holdStatus(ctx, holdId), seat: (await seatRows(ctx, seats))[0]!.status };
-    await ctx.deps.db.query(`UPDATE orders SET created_at = now() - interval '61 seconds' WHERE id = $1`, [
-      order.body.order.id,
-    ]);
+    await startPayment(orderId, 61); // the webhook is long overdue
     await sweepOnce(ctx.deps);
 
     expect(whilePaying).toEqual({ hold: 'active', seat: 'held' });
     expect(await holdStatus(ctx, holdId)).toBe('expired');
     expect((await seatRows(ctx, seats))[0]!.status).toBe('available');
+  });
+
+  it('expires a lapsed hold whose order has no payment in flight', async () => {
+    const { seats, holdId } = await heldHold(1);
+    await lapsedWithOrder(holdId);
+
+    await sweepOnce(ctx.deps);
+
+    expect(await holdStatus(ctx, holdId)).toBe('expired');
+    expect((await seatRows(ctx, seats))[0]!.status).toBe('available');
+  });
+
+  it('lets a payment still processing at expiry sell the seats when its webhook lands after a sweep', async () => {
+    const { seats, holdId } = await heldHold(2);
+    const { orderId, intentId } = await lapsedWithOrder(holdId);
+    await startPayment(orderId, 0);
+
+    await sweepOnce(ctx.deps);
+    await sendWebhook(ctx, { type: 'payment_intent.succeeded', intentId });
+
+    const { rows } = await ctx.deps.db.query('SELECT status::text FROM orders WHERE id = $1', [orderId]);
+    expect(rows[0]).toEqual({ status: 'paid' });
+    expect((await seatRows(ctx, seats)).map((s) => s.status)).toEqual(['sold', 'sold']);
   });
 
   it('expires a lapsed hold whose seats another buyer already took over', async () => {

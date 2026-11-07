@@ -1,6 +1,10 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { verifyEvent } from '../../src/bench/verify';
+import { releaseHold } from '../../src/booking/holds.service';
 import { getStrategy } from '../../src/booking/strategies';
+import { claimIfAvailable } from '../../src/booking/strategies/conditional';
 import { seatKey } from '../../src/booking/strategies/redis';
+import type { HoldRow } from '../../src/booking/strategies/types';
 import { createOnSaleEvent, makeCtx, resetState, type TestCtx } from '../helpers';
 import { holdStatus, insertUsers, seatRows } from './fixtures';
 
@@ -94,6 +98,66 @@ describe.each(['naive', 'pessimistic', 'conditional', 'redis'] as const)('%s str
       { id: c, status: 'held', hold_id: second.hold.id, order_id: null },
     ]);
   });
+
+  it('re-holding own seats plus one more succeeds', async () => {
+    const [a, b, c] = seats as [number, number, number];
+    const first = await hold(alice, [a, b]);
+    if (!first.ok) throw new Error('first hold failed');
+
+    const second = await hold(alice, [a, b, c]);
+
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(await holdStatus(ctx, first.hold.id)).toBe('released');
+    expect((await seatRows(ctx, [a, b, c])).map((s) => s.hold_id)).toEqual([second.hold.id, second.hold.id, second.hold.id]);
+  });
+
+  it('answers CHECKOUT_IN_PROGRESS before any seat conflict while the previous hold is being paid for', async () => {
+    const [a, b] = seats as [number, number];
+    const first = await hold(alice, [a]);
+    if (!first.ok) throw new Error('first hold failed');
+    await placeOrder(first.hold);
+    await hold(bob, [b]);
+
+    await expect(hold(alice, [b])).rejects.toMatchObject({ code: 'CHECKOUT_IN_PROGRESS' });
+    expect(await holdStatus(ctx, first.hold.id)).toBe('active');
+  });
+});
+
+/** A pending order for the hold, as POST /api/orders would leave it. */
+async function placeOrder(hold: HoldRow): Promise<void> {
+  await ctx.deps.db.query(
+    `INSERT INTO orders (user_id, event_id, hold_id, amount_paise, idempotency_key) VALUES ($1, $2, $3, $4, $5)`,
+    [hold.userId, hold.eventId, hold.id, hold.amountPaise, `key-${hold.id}`],
+  );
+}
+
+describe('hold timestamps', () => {
+  it('a claim that waited for a release starts after that release ended, so the bench verifier passes', async () => {
+    const { eventId, seatIds } = await createOnSaleEvent(ctx);
+    const seat = seatIds[0]!;
+    const [alice, bob] = (await insertUsers(ctx, 2)) as [string, string];
+    const first = await getStrategy('conditional').hold(ctx.deps, { eventId, userId: alice, seatIds: [seat], ttlSec: 300 });
+    if (!first.ok) throw new Error('first hold failed');
+
+    // Bob's transaction begins, Alice releases her hold and commits, then Bob claims the seat.
+    const c = await ctx.deps.db.connect();
+    try {
+      await c.query('BEGIN');
+      await sleep(20);
+      await releaseHold(ctx.deps, first.hold.id, alice);
+      const second = await claimIfAvailable(c, { eventId, userId: bob, seatIds: [seat], ttlSec: 300 }, 'conditional');
+      await c.query('COMMIT');
+      expect(second.ok).toBe(true);
+    } finally {
+      c.release();
+    }
+
+    expect(await verifyEvent(ctx.deps.db, eventId, { strategy: 'conditional' })).toMatchObject({
+      doublePromisedSeats: 0,
+      pass: true,
+    });
+  });
 });
 
 describe('redis strategy gate', () => {
@@ -122,7 +186,7 @@ describe('redis strategy gate', () => {
     }
   });
 
-  it('rejects a loser in Redis without touching Postgres, and claims nothing for it', async () => {
+  it('turns a loser away in Redis: one read, no transaction, nothing claimed', async () => {
     const [a, b] = seats as [number, number];
     await redis.hold(ctx.deps, { eventId, userId: alice, seatIds: [a], ttlSec: 300 });
     const query = vi.spyOn(ctx.deps.db, 'query');
@@ -131,9 +195,39 @@ describe('redis strategy gate', () => {
     const result = await redis.hold(ctx.deps, { eventId, userId: bob, seatIds: [b, a], ttlSec: 300 });
 
     expect(result).toEqual({ ok: false, takenSeatIds: [a] });
-    expect(query).not.toHaveBeenCalled();
-    expect(connect).not.toHaveBeenCalled();
+    // The lookup of the buyer's own hold is the only statement; pool.query checks out the one
+    // client it runs on, and a transaction would have checked out a second.
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(String(query.mock.calls[0]![0])).toMatch(/^\s*SELECT/);
+    expect(connect).toHaveBeenCalledTimes(1);
     expect(await ctx.deps.redis.exists(seatKey(eventId, b))).toBe(0);
+  });
+
+  it("moves the gates of the buyer's re-held seats to the new hold", async () => {
+    const [a, b, c] = seats as [number, number, number];
+    await redis.hold(ctx.deps, { eventId, userId: alice, seatIds: [a, b], ttlSec: 300 });
+
+    const second = await redis.hold(ctx.deps, { eventId, userId: alice, seatIds: [a, b, c], ttlSec: 300 });
+    if (!second.ok) throw new Error('re-hold failed');
+
+    for (const id of [a, b, c]) expect(await ctx.deps.redis.get(seatKey(eventId, id))).toBe(second.hold.id);
+  });
+
+  it("gives re-held seats' gates back to the previous hold when Postgres rejects the new one", async () => {
+    const [a, b, c] = seats as [number, number, number];
+    const first = await redis.hold(ctx.deps, { eventId, userId: alice, seatIds: [a, b], ttlSec: 300 });
+    if (!first.ok) throw new Error('first hold failed');
+    await ctx.deps.db.query(`UPDATE event_seats SET status = 'sold', order_id = gen_random_uuid() WHERE id = $1`, [c]);
+
+    const result = await redis.hold(ctx.deps, { eventId, userId: alice, seatIds: [a, b, c], ttlSec: 300 });
+
+    expect(result).toEqual({ ok: false, takenSeatIds: [c] });
+    expect(await holdStatus(ctx, first.hold.id)).toBe('active');
+    for (const id of [a, b]) {
+      expect(await ctx.deps.redis.get(seatKey(eventId, id))).toBe(first.hold.id);
+      expect(await ctx.deps.redis.pttl(seatKey(eventId, id))).toBeGreaterThan(290_000);
+    }
+    expect(await ctx.deps.redis.exists(seatKey(eventId, c))).toBe(0);
   });
 
   it('gives its gate keys back when the Postgres safety net rejects the seats', async () => {

@@ -21,14 +21,16 @@ export function startSweeper(deps: AppDeps): () => void {
  */
 export async function sweepOnce(deps: AppDeps): Promise<number> {
   const freed = await withTx(deps.db, async (c) => {
-    // An order younger than 60 s may have a payment on its way, so its hold is left alone.
+    // §7.3's 60 s grace protects a payment in flight: while the hold's intent has been processing
+    // for under 60 s, the hold is left alone, so a webhook arriving after expiry still sells
+    // seats nobody took. (Its seats stay lazily available, so a buyer who takes one still wins.)
     // SKIP LOCKED: a hold a buyer or a webhook is working on right now waits for the next sweep.
     const { rows } = await c.query<{ id: string }>(
       `SELECT h.id FROM holds h
         WHERE h.status = 'active' AND h.expires_at <= now()
-          AND NOT EXISTS (SELECT 1 FROM orders o
+          AND NOT EXISTS (SELECT 1 FROM orders o JOIN payment_intents pi ON pi.order_id = o.id
                            WHERE o.hold_id = h.id AND o.status = 'pending_payment'
-                             AND o.created_at > now() - interval '60 seconds')
+                             AND pi.status = 'processing' AND pi.updated_at > now() - interval '60 seconds')
           FOR UPDATE SKIP LOCKED`,
     );
     return endHolds(
