@@ -440,6 +440,10 @@ export const BenchRunSchema = z.object({
   ticketsSold: count,
   seatsTotal: count,
   invariants: InvariantsSchema,
+  /** The order and payment path of a flash-sale run (absent in older result files). */
+  orders: z.object({ created: count, paid: count, failed: count, errors: count, timeouts: count }).optional(),
+  /** Virtual users that gave up before the run finished (absent in older result files). */
+  vuAborted: count.optional(),
 });
 export type BenchRun = z.infer<typeof BenchRunSchema>;
 

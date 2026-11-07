@@ -16,7 +16,6 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { z } from 'zod';
 import { BenchQueueSchema, BenchRunSchema, BenchSummarySchema, InvariantsSchema } from '@seatlock/shared';
 
 export const SCENARIOS = ['hot-seat', 'flash-sale'];
@@ -49,13 +48,6 @@ function trend(k6, name) {
 
 // ---------------------------------------------------------------- one scenario run
 
-const count = z.number().int().nonnegative();
-// TODO(I1): move into BenchRunSchema in @seatlock/shared as optional fields (see NOTES-integration.md).
-/** BenchRun plus the failures outside the hold call: the order and payment path, and VUs that gave up. */
-export const RunSchema = BenchRunSchema.extend({
-  orders: z.object({ created: count, paid: count, failed: count, errors: count, timeouts: count }).default({ created: 0, paid: 0, failed: 0, errors: 0, timeouts: 0 }),
-  vuAborted: count.default(0),
-});
 
 /** Builds and validates one BenchRun from the k6 export and the bench:verify output of that run. */
 export function buildRun({ scenario, strategy, vus, k6, verify }) {
@@ -93,7 +85,7 @@ export function buildRun({ scenario, strategy, vus, k6, verify }) {
     },
     vuAborted: counter(k6, 'vu_aborted'),
   };
-  return RunSchema.parse(run);
+  return BenchRunSchema.parse(run);
 }
 
 // ---------------------------------------------------------------- waiting room
@@ -335,8 +327,7 @@ export function renderMarkdown(summary, problems, warnings, observedRate) {
 }
 
 export function buildSummary({ runs, queue, machine }) {
-  // The shared schema strips the order and abort fields, so validate with it and keep the full runs.
-  return { ...BenchSummarySchema.parse({ generatedAt: new Date().toISOString(), machine, runs, queue }), runs: runs.map((r) => RunSchema.parse(r)) };
+  return BenchSummarySchema.parse({ generatedAt: new Date().toISOString(), machine, runs, queue });
 }
 
 // ---------------------------------------------------------------- CLI
@@ -377,7 +368,7 @@ function cmdSummary() {
   for (const scenario of SCENARIOS) {
     for (const strategy of STRATEGIES) {
       const file = path.join(resultsDir(), `${scenario}-${strategy}.json`);
-      if (existsSync(file)) runs.push(RunSchema.parse(readJson(file)));
+      if (existsSync(file)) runs.push(BenchRunSchema.parse(readJson(file)));
     }
   }
   const { observedAdmitRatePerSec, problems: queueProblems = [], ...queue } = readJson(path.join(resultsDir(), 'queue.json'));
