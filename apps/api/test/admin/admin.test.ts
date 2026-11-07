@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { joinQueue, getQueueEvent } from '../../src/queue/service';
+import { getQueueCounters, getQueueEvent, joinQueue, simulateCrowd } from '../../src/queue/service';
 import { createOnSaleEvent, createUser, createVenue, makeCtx, resetState, type TestCtx } from '../helpers';
 import { insertHold, insertPaidOrder, insertUser } from '../events/fixtures';
 
@@ -141,6 +141,19 @@ describe('venues and events', () => {
 });
 
 describe('dashboard', () => {
+  it('shows a real hold in holdsPerSecond, in the key format the hold service writes', async () => {
+    const { eventId, seatIds } = await createOnSaleEvent(ctx);
+    const buyer = await createUser(ctx);
+    const hold = await request(ctx.app).post('/api/holds').set(buyer.bearer).send({ eventId, seatIds: [seatIds[0]!] });
+    expect(hold.status).toBe(201);
+
+    const res = await request(ctx.app).get(`/api/admin/events/${eventId}/dashboard`).set(admin);
+    const perSecond = res.body.holdsPerSecond as number[];
+    expect(perSecond).toHaveLength(60);
+    expect(perSecond.filter((n) => n > 0)).toEqual([1]);
+    expect(perSecond.reduce((x, y) => x + y, 0)).toBe(1);
+  });
+
   it('counts seats, money, holds and recent orders', async () => {
     const { eventId, seatIds } = await createOnSaleEvent(ctx);
     const buyer = await insertUser(ctx, 'Priya Buyer');
@@ -275,6 +288,27 @@ describe('bench-reset', () => {
     expect(res.status).toBe(404);
   });
 
-  // The 204 path calls B1's releaseHoldsForEvent (booking/holds.service.ts), still a stub here.
-  it.todo('with BENCH_MODE on, frees the event and answers 204');
+  it('with BENCH_MODE on, frees the event and answers 204', async () => {
+    const bench = await makeCtx({ benchMode: true });
+    try {
+      const { eventId, seatIds } = await createOnSaleEvent(bench, { queueEnabled: true });
+      const userId = await insertUser(bench);
+      await insertHold(bench, { eventId, userId, seatIds: [seatIds[0]!] });
+      await insertPaidOrder(bench, { eventId, userId, seatIds: [seatIds[1]!] });
+      await simulateCrowd(bench.deps, eventId, 3);
+
+      const res = await request(bench.app).post(`/api/admin/events/${eventId}/bench-reset`).set(admin);
+      expect(res.status).toBe(204);
+
+      const seats = await bench.deps.db.query("SELECT 1 FROM event_seats WHERE event_id = $1 AND status <> 'available'", [eventId]);
+      expect(seats.rowCount).toBe(0);
+      for (const table of ['holds', 'orders', 'tickets']) {
+        const { rows } = await bench.deps.db.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`);
+        expect(rows[0]!.n).toBe(0);
+      }
+      expect(await getQueueCounters(bench.deps, eventId)).toEqual({ length: 0, admitted: 0, simulated: 0 });
+    } finally {
+      await bench.close();
+    }
+  });
 });

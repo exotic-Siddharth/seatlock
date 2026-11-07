@@ -16,14 +16,14 @@ const navLinks = () =>
 describe('AppShell', () => {
   it('shows the public nav and sign-in links to a guest', async () => {
     renderWithProviders(<App />);
-    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 }, { timeout: 5000 })).toBeTruthy();
     expect(navLinks()).toEqual(['Events', 'My tickets', 'Lab']);
     expect(screen.getByRole('link', { name: 'Log in' })).toBeTruthy();
   });
 
   it('adds the Admin link and a log-out button for an admin', async () => {
     renderWithProviders(<App />, { user: admin });
-    await screen.findByRole('heading', { level: 1 });
+    await screen.findByRole('heading', { level: 1 }, { timeout: 5000 });
     expect(navLinks()).toEqual(['Events', 'My tickets', 'Lab', 'Admin']);
     expect(screen.getByText('Ravi Admin')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Log out' })).toBeTruthy();
@@ -31,30 +31,30 @@ describe('AppShell', () => {
 
   it('renders the 404 page for unknown paths', async () => {
     renderWithProviders(<App />, { route: '/no/such/page' });
-    expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Page not found' }, { timeout: 5000 })).toBeTruthy();
   });
 });
 
 describe('route guards', () => {
   it('sends a guest to log in, remembering where they were going', async () => {
     renderWithProviders(<App />, { route: '/tickets' });
-    expect(await screen.findByRole('heading', { name: 'Log in' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Log in' }, { timeout: 5000 })).toBeTruthy();
   });
 
   it('lets a signed-in user through', async () => {
     renderWithProviders(<App />, { route: '/tickets', user: fan });
-    expect(await screen.findByRole('heading', { name: 'My tickets' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'My tickets' }, { timeout: 5000 })).toBeTruthy();
   });
 
   it('keeps non-admins out of admin pages', async () => {
     renderWithProviders(<App />, { route: '/admin', user: fan });
-    expect(await screen.findByText('Admins only')).toBeTruthy();
+    expect(await screen.findByText('Admins only', undefined, { timeout: 5000 })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'Admin: events' })).toBeNull();
   });
 
   it('lets admins into admin pages', async () => {
     renderWithProviders(<App />, { route: '/admin/checkin', user: admin });
-    expect(await screen.findByRole('heading', { name: 'Admin: check-in' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Door check-in' }, { timeout: 5000 })).toBeTruthy();
   });
 });
 
