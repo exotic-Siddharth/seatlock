@@ -116,6 +116,28 @@ describe('Checkout', () => {
     expect(second!.headers['Idempotency-Key']).toBe(first!.headers['Idempotency-Key']);
   });
 
+  it('keeps paying when re-fetching the extended hold fails', async () => {
+    let holdRequests = 0;
+    const http = mockApi({
+      // Creating the order extends the hold, and the page re-fetches it; that re-fetch fails.
+      [`GET /api/holds/${HOLD_ID}`]: () =>
+        ++holdRequests === 1 ? [200, { hold: makeHold() }] : [503, { error: { code: 'INTERNAL', message: 'Unavailable' } }],
+      [ORDERS]: [201, created],
+      [CONFIRM]: [202, { status: 'processing' }],
+      [`GET /api/orders/${ORDER_ID}`]: [200, { order: makeOrder({ status: 'paid' }) }],
+    });
+    const user = renderCheckout();
+
+    await user.click(await screen.findByRole('button', { name: /4242 4242 4242 4242/ }));
+    await user.click(screen.getByRole('button', { name: 'Pay ₹4,998' }));
+    await waitFor(() => expect(holdRequests).toBe(2));
+    expect(screen.queryByRole('heading', { name: 'Could not load your checkout' })).toBeNull();
+    await nextPoll();
+
+    await waitFor(() => expect(location()).toBe(`/orders/${ORDER_ID}`));
+    expect(http.callsTo(CONFIRM)).toHaveLength(1);
+  });
+
   it('reports a payment that failed for good', async () => {
     mockApi({
       [`GET /api/holds/${HOLD_ID}`]: [200, { hold: makeHold() }],

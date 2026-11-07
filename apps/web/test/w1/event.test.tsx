@@ -141,6 +141,25 @@ describe('Event page: picking seats', () => {
     expect(await screen.findByText('Sold out')).toBeTruthy();
     expect(await seat('Sec A, Row A, Seat 1, Gold, ₹2,499, sold')).toBeTruthy();
   });
+
+  it('keeps the map, and the pick, when a background re-fetch of the seats fails', async () => {
+    const user = userEvent.setup();
+    let requests = 0;
+    mockApi({
+      'GET /api/events/monsoon-static': [200, { event: makeEvent() }],
+      // The first snapshot loads; the re-sync after the stream (re)connects finds the network down.
+      [SEATS_ROUTE]: () => (++requests === 1 ? [200, makeSnapshot()] : [503, { error: { code: 'INTERNAL', message: 'Unavailable' } }]),
+    });
+    renderEvent();
+    await user.click(await seat('Sec A, Row A, Seat 1, Gold, ₹2,499, available'));
+
+    act(() => MockEventSource.latest().open());
+
+    expect(await screen.findByText('Could not refresh the seats')).toBeTruthy();
+    expect(requests).toBe(2);
+    expect(screen.getByRole('button', { name: 'Sec A, Row A, Seat 1, Gold, ₹2,499, selected' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Could not load the seat map' })).toBeNull();
+  });
 });
 
 describe('Event page: waiting room', () => {

@@ -26,7 +26,7 @@ export default function OrderConfirmation() {
       </div>
     );
   }
-  if (order.isError) {
+  if (order.isLoadingError) {
     return (
       <LoadError
         error={order.error}
