@@ -1,4 +1,5 @@
 import { SEAT_PITCH, type VenueLayout, type VenueSection } from '@seatlock/shared';
+import { BENCH_LAYOUT } from '../bench/seed';
 
 /** The venues of the dev seed. All names and places are fictional. */
 export type SeedVenue = { slug: string; name: string; city: string; layout: VenueLayout };
@@ -98,31 +99,9 @@ const BASEMENT_NINE: VenueLayout = {
   ],
 };
 
-/**
- * Bench Stadium: 10,000 seats for load tests, never shown in the public list. This is the same
- * layout `npm run bench:seed` writes; the seed inserts it only if the venue is missing.
- */
-const BENCH_STADIUM: VenueLayout = {
-  width: 620,
-  height: 2300,
-  stage: { x: 160, y: 10, w: 300, h: 30, label: 'Stage' },
-  tiers: [
-    { key: 'platinum', name: 'Platinum' },
-    { key: 'gold', name: 'Gold' },
-    { key: 'silver', name: 'Silver' },
-    { key: 'bronze', name: 'Bronze' },
-  ],
-  sections: [
-    { key: 'P', name: 'Platinum', tier: 'platinum', rows: 20, seatsPerRow: 50, x: 60, y: 60, angle: 0 },
-    { key: 'G', name: 'Gold', tier: 'gold', rows: 40, seatsPerRow: 50, x: 60, y: 290, angle: 0 },
-    { key: 'S', name: 'Silver', tier: 'silver', rows: 60, seatsPerRow: 50, x: 60, y: 720, angle: 0 },
-    { key: 'B', name: 'Bronze', tier: 'bronze', rows: 80, seatsPerRow: 50, x: 60, y: 1350, angle: 0 },
-  ],
-};
-
 export const SEED_VENUES: SeedVenue[] = [
   { slug: 'lotus-hall', name: 'Lotus Hall', city: 'Pune', layout: LOTUS_HALL },
   { slug: 'riverside-arena', name: 'Riverside Arena', city: 'Bengaluru', layout: RIVERSIDE_ARENA },
   { slug: 'basement-nine', name: 'Basement Nine', city: 'Mumbai', layout: BASEMENT_NINE },
-  { slug: 'bench-stadium', name: 'Bench Stadium', city: 'Testville', layout: BENCH_STADIUM },
+  { slug: 'bench-stadium', name: 'Bench Stadium', city: 'Testville', layout: BENCH_LAYOUT },
 ];

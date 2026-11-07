@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { createParser } from 'eventsource-parser';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createOnSaleEvent, createVenue, makeCtx, resetState, type TestCtx } from '../helpers';
+import { createOnSaleEvent, createUser, createVenue, makeCtx, resetState, type TestCtx } from '../helpers';
 import { insertHold, insertPaidOrder, insertUser } from './fixtures';
 
 let ctx: TestCtx;
@@ -142,8 +142,20 @@ describe('GET /api/events/:id/seats', () => {
     expect(byId.get(seatIds[59]!)).toEqual([seatIds[59], 'B', 'C', 10, 'silver', 'A']);
   });
 
-  // Needs B1's getActiveHoldForUser (booking/holds.service.ts), which is still a stub here.
-  it.todo("returns the caller's active hold as myHold");
+  it("returns the caller's active hold as myHold, and null to everyone else", async () => {
+    const { eventId, seatIds } = await createOnSaleEvent(ctx);
+    const me = await createUser(ctx);
+    const other = await createUser(ctx);
+    const holdId = await insertHold(ctx, { eventId, userId: me.user.id, seatIds: [seatIds[0]!, seatIds[1]!] });
+
+    const mine = await request(ctx.app).get(`/api/events/${eventId}/seats`).set(me.bearer);
+    expect(mine.status).toBe(200);
+    expect(mine.body.myHold).toMatchObject({ id: holdId, seatIds: [seatIds[0], seatIds[1]] });
+    expect(Date.parse(mine.body.myHold.expiresAt)).toBeGreaterThan(Date.now());
+
+    const theirs = await request(ctx.app).get(`/api/events/${eventId}/seats`).set(other.bearer);
+    expect(theirs.body.myHold).toBeNull();
+  });
 
   it('404s for an unknown event, including a malformed id', async () => {
     expect((await request(ctx.app).get(`/api/events/${randomUUID()}/seats`)).status).toBe(404);
