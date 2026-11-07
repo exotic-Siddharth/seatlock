@@ -1,0 +1,20 @@
+{
+  "name": "@seatlock/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Zod contracts, error codes, seat-map geometry and money helpers shared by the API and the web app.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "vitest": "^5.1.0"
+  }
+}

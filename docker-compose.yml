@@ -1,0 +1,35 @@
+name: seatlock
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: seatlock
+      POSTGRES_PASSWORD: seatlock
+      POSTGRES_DB: seatlock
+    # Headroom for two API replicas, the dev server and parallel test runs.
+    command: ["postgres", "-c", "max_connections=200"]
+    ports:
+      - "55434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U seatlock -d seatlock"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    # Everything in Redis is rebuildable (sessions, queue, gates), so no persistence.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "56381:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
