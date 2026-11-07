@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "sideEffects": false,
   "description": "Zod contracts, error codes, seat-map geometry and money helpers shared by the API and the web app.",
   "exports": {
     ".": "./src/index.ts"
