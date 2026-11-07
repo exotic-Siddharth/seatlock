@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'build/**']
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: seatlock
+          POSTGRES_PASSWORD: seatlock
+          POSTGRES_DB: seatlock
+        ports: ['55434:5432']
+        options: >-
+          --health-cmd "pg_isready -U seatlock -d seatlock"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['56381:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://seatlock:seatlock@localhost:55434/seatlock
+      REDIS_URL: redis://localhost:56381/0
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run db:migrate
+      # The API suite creates and migrates seatlock_test itself (test/global-setup.ts).
+      - run: npm test
+      - run: npm run build
