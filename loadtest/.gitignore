@@ -1,0 +1,4 @@
+# Raw k6 exports, logs and verify output of a run: reproducible, large, not committed.
+results/raw/
+# Smoke runs (run-bench.sh --quick) are never the published numbers.
+results-quick/
