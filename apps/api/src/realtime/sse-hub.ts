@@ -82,10 +82,28 @@ export function createSseHub(sub: Redis, log: Logger, metrics: Metrics, opts: Ss
     for (const set of clients.values()) for (const res of set) res.write(':hb\n\n');
   };
 
+  /** Ends every stream. Clients are detached first, so nothing writes to an ended response. */
+  const closeAll = (): number => {
+    const open = [...clients.values()].flatMap((set) => [...set]);
+    clients.clear();
+    pending.clear();
+    for (const res of open) res.end();
+    metrics.sseClients.set(0);
+    return open.length;
+  };
+
+  // Messages published while the subscriber was disconnected are lost. Ending the streams
+  // makes each browser's EventSource reconnect and re-fetch its seat snapshot.
+  const onReconnect = () => {
+    log.warn({ clients: closeAll() }, 'seat subscriber reconnected; closed SSE streams so clients re-sync');
+  };
+
   return {
     async start() {
       sub.on('pmessage', onMessage);
       await sub.psubscribe(`${CHANNEL_PREFIX}*`);
+      // The first 'ready' fired before psubscribe resolved; any later one is ioredis reconnecting.
+      sub.on('ready', onReconnect);
       timers = [
         setInterval(flush, flushMs),
         setInterval(() => void sendStats(), statsMs),
@@ -130,10 +148,8 @@ export function createSseHub(sub: Redis, log: Logger, metrics: Metrics, opts: Ss
       for (const t of timers) clearInterval(t);
       timers = [];
       sub.off('pmessage', onMessage);
-      for (const set of clients.values()) for (const res of set) res.end();
-      clients.clear();
-      pending.clear();
-      metrics.sseClients.set(0);
+      sub.off('ready', onReconnect);
+      closeAll();
       if (sub.status === 'ready') await sub.punsubscribe(`${CHANNEL_PREFIX}*`).catch(() => undefined);
     },
   };

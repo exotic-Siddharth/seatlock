@@ -67,6 +67,7 @@ async function ownHub(opts: Parameters<typeof createSseHub>[3] = {}) {
   await hub.start();
   return {
     hub,
+    sub,
     async dispose() {
       await hub.stop();
       sub.disconnect();
@@ -120,6 +121,27 @@ describe('SSE hub', () => {
     await vi.waitFor(() => expect(client.comments).toContain('hb'));
 
     client.close();
+    await dispose();
+  });
+
+  it('ends client streams when the subscriber reconnects, so clients re-sync', async () => {
+    const { hub, sub, dispose } = await ownHub();
+    const eventId = randomUUID();
+    const url = serve(hub, eventId);
+    const client = await connect(url);
+
+    // Changes published while the subscriber is down are lost, so the stream must not stay open and silent.
+    sub.disconnect(true); // drop the connection; ioredis reconnects and re-subscribes
+    await client.ended(5000);
+    expect(hub.clientCount()).toBe(0);
+
+    // The browser's EventSource reconnects and gets a working stream again.
+    const again = await connect(url);
+    await vi.waitFor(async () => {
+      await ctx.deps.publisher.publish(eventId, [{ id: 9, st: 'S' }]);
+      expect(JSON.parse((await again.next('seats', 300)).data)).toEqual({ changes: [{ id: 9, st: 'S' }] });
+    });
+    again.close();
     await dispose();
   });
 
