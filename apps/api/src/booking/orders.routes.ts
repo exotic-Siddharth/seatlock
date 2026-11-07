@@ -1,17 +1,39 @@
+import { OrderRequestSchema } from '@seatlock/shared';
 import { Router } from 'express';
+import { z } from 'zod';
+import { currentUser, requireAuth } from '../auth/middleware';
 import type { AppDeps } from '../context';
-import { AppError } from '../errors';
+import { parse } from '../http';
+import { hashBody, requireIdempotencyKey, withIdempotency } from '../infra/idempotency';
+import { rateLimit } from '../infra/rate-limit';
+import { createOrder, getOrder, listOrders } from './orders.service';
 
-// Stub: lane B1 implements these. Mounted at /api/orders (spec §7.2, §9).
+const OrderIdSchema = z.string().uuid();
 
-const notImplemented = () => {
-  throw new AppError('INTERNAL', 'not implemented');
-};
-
-export function ordersRouter(_deps: AppDeps): Router {
+/** Mounted at /api/orders. */
+export function ordersRouter(deps: AppDeps): Router {
   const router = Router();
-  router.post('/', notImplemented);
-  router.get('/', notImplemented);
-  router.get('/:id', notImplemented);
+  const limit = rateLimit(deps, { name: 'orders', limit: 20, windowSec: 60, by: 'user' });
+
+  router.post('/', requireAuth, limit, async (req, res) => {
+    const userId = currentUser(req).id;
+    const key = requireIdempotencyKey(req);
+    const body = parse(OrderRequestSchema, req.body);
+    const result = await withIdempotency(
+      deps.redis,
+      { userId, route: 'orders', key, bodyHash: hashBody(body) },
+      async () => ({ status: 201, body: await createOrder(deps, { userId, holdId: body.holdId, idempotencyKey: key }) }),
+    );
+    res.status(result.status).json(result.body);
+  });
+
+  router.get('/', requireAuth, async (req, res) => {
+    res.json({ items: await listOrders(deps.db, currentUser(req).id) });
+  });
+
+  router.get('/:id', requireAuth, async (req, res) => {
+    res.json({ order: await getOrder(deps.db, parse(OrderIdSchema, req.params.id), currentUser(req).id) });
+  });
+
   return router;
 }
