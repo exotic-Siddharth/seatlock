@@ -13,6 +13,8 @@ type Summarize = {
     httpReqsPerSec: number;
     ticketsSold: number;
     invariants: { pass: boolean };
+    orders: Record<string, number>;
+    vuAborted: number;
   };
   findProblems(summary: unknown): string[];
   findWarnings(summary: unknown): string[];
@@ -108,6 +110,27 @@ describe('buildRun', () => {
     expect(buildRun({ scenario: 'hot-seat', strategy: 'redis', vus: 5, k6, verify: verification() }).holds).toEqual({
       attempts: 5, success: 1, conflict: 0, errors: 4,
     });
+  });
+
+  it('reads order, payment and aborted-VU failures from the export', () => {
+    const k6 = k6Export({
+      orders_created: { count: 90, rate: 1 }, orders_paid: { count: 80, rate: 1 }, orders_failed: { count: 2, rate: 0 },
+      orders_error: { count: 5, rate: 0 }, orders_timeout: { count: 3, rate: 0 }, vu_aborted: { count: 7, rate: 0 },
+    });
+    const run = buildRun({ scenario: 'flash-sale', strategy: 'redis', vus: 100, k6, verify: verification() });
+    expect(run.orders).toEqual({ created: 90, paid: 80, failed: 2, errors: 5, timeouts: 3 });
+    expect(run.vuAborted).toBe(7);
+    const warnings = findWarnings({ runs: [{ ...run, scenario: 'flash-sale', strategy: 'redis', vus: 100 }] }).join(' ');
+    expect(warnings).toMatch(/5 order or payment requests failed/);
+    expect(warnings).toMatch(/3 orders were still unpaid/);
+    expect(warnings).toMatch(/7 of 100 VUs aborted/);
+  });
+
+  it('defaults the new counters to zero and stays quiet when nothing failed', () => {
+    const run = buildRun({ scenario: 'hot-seat', strategy: 'redis', vus: 1000, k6: k6Export(), verify: verification() });
+    expect(run.orders).toEqual({ created: 0, paid: 0, failed: 0, errors: 0, timeouts: 0 });
+    expect(run.vuAborted).toBe(0);
+    expect(findWarnings({ runs: [{ ...run, scenario: 'hot-seat', strategy: 'redis', vus: 1000 }] })).toEqual([]);
   });
 
   it('refuses a k6 export without the hold metrics', () => {
