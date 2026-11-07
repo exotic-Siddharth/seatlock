@@ -32,11 +32,12 @@ const location = () => screen.getByTestId('location').textContent;
 afterEach(() => vi.unstubAllGlobals());
 
 describe('safeNext', () => {
-  it('accepts same-site paths', () => {
-    expect(safeNext('/tickets')).toBe('/tickets');
-    expect(safeNext('/events/x?y=1')).toBe('/events/x?y=1');
-    expect(safeNext('/orders/abc#tickets')).toBe('/orders/abc#tickets');
-  });
+  it.each(['/', '/tickets', '/events/x?y=1', '/events/x?y=1#z', '/orders/abc#tickets', '/events?q=a%20b'])(
+    'keeps the same-site path %s unchanged',
+    (path) => {
+      expect(safeNext(path)).toBe(path);
+    },
+  );
 
   it.each([
     ['nothing', null],
@@ -55,6 +56,12 @@ describe('safeNext', () => {
     ['an encoded slash', '/%2F/evil.example'],
     ['an encoded backslash', '/%5C/evil.example'],
     ['malformed percent-encoding', '/%E0%A4%A'],
+    // Resolving dot segments turns each of these into the path //evil.example.
+    ['a dot segment before //', '/.//evil.example'],
+    ['a parent segment before //', '/..//evil.example'],
+    ['an encoded dot segment before //', '/%2e//evil.example'],
+    ['a segment undone by .. before //', '/a/..//evil.example'],
+    ['dot segments before an encoded slash', '/a/../%2Fevil.example'],
   ])('rejects %s', (_, unsafe) => {
     expect(safeNext(unsafe)).toBe('/');
   });

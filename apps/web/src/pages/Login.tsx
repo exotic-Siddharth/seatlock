@@ -9,25 +9,29 @@ import { useAuth } from '../lib/auth';
 const isControlOrBackslash = (c: string) => c.charCodeAt(0) < 0x20 || c === '\u007f' || c === '\\';
 
 /**
- * Where to go after signing in: `next` if it is a path on this site, else "/".
- *
- * Checking the prefix is not enough. Browsers read "\" as "/" and silently drop tab, CR and LF,
- * so "/\evil.example" and "/<tab>/evil.example" both become "//evil.example", another host
- * (and React Router falls back to a full page load when pushState refuses a cross-origin URL).
- * So the path is also rejected if, even after percent-decoding, it holds a control character
- * or a backslash, or starts with "//"; what remains must resolve to this origin.
+ * A path on this site: exactly one leading "/", and no control character or backslash, both
+ * as written and once percent-decoded. Browsers read "\" as "/" and silently drop tab, CR and
+ * LF, so "/\evil.example" and "/<tab>/evil.example" would otherwise become "//evil.example",
+ * another host (React Router falls back to a full page load when pushState refuses it).
  */
-export function safeNext(raw: string | null): string {
-  if (!raw?.startsWith('/')) return '/';
+function isSitePath(path: string): boolean {
   let decoded: string;
   try {
-    decoded = decodeURIComponent(raw);
+    decoded = decodeURIComponent(path);
   } catch {
-    return '/'; // malformed percent-encoding
+    return false; // malformed percent-encoding
   }
-  if (decoded.startsWith('//') || [...decoded].some(isControlOrBackslash)) return '/';
+  return [path, decoded].every((p) => p.startsWith('/') && !p.startsWith('//') && ![...p].some(isControlOrBackslash));
+}
+
+/** Where to go after signing in: `next` if it is a path on this site, else "/". */
+export function safeNext(raw: string | null): string {
+  if (!raw || !isSitePath(raw)) return '/';
   const url = new URL(raw, window.location.origin);
-  return url.origin === window.location.origin ? url.pathname + url.search + url.hash : '/';
+  const next = url.pathname + url.search + url.hash;
+  // Checked again after normalising: resolving dot segments can itself produce "//host",
+  // as in "/.//evil.example" or "/a/..//evil.example".
+  return url.origin === window.location.origin && isSitePath(next) ? next : '/';
 }
 
 /** "?next=..." to carry the destination over to the other auth page. */
