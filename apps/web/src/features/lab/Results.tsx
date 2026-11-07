@@ -31,6 +31,10 @@ const VIOLATIONS: [Exclude<keyof Invariants, 'pass' | 'refundedOrders'>, string]
 
 const ms = (v: number) => `${formatNumber(Math.round(v * 10) / 10)} ms`;
 const perSec = (v: number) => `${formatNumber(Math.round(v))}/s`;
+const DASH = '—';
+
+/** Paid orders out of the orders created, or a dash for result files from before orders were counted. */
+const ordersCell = (r: BenchRun) => (r.orders ? `${formatNumber(r.orders.paid)} / ${formatNumber(r.orders.created)}` : DASH);
 
 const TH = 'px-3 py-2 text-xs font-semibold tracking-wide text-muted uppercase';
 const TD = 'px-3 py-2.5 text-right tabular-nums';
@@ -72,7 +76,7 @@ function ScenarioResults({ summary, scenario }: { summary: BenchSummary; scenari
       </p>
 
       <Card className="mt-4 overflow-x-auto">
-        <table aria-label={`${scenario.name} results`} className="w-full min-w-[56rem] text-sm">
+        <table aria-label={`${scenario.name} results`} className="w-full min-w-[64rem] text-sm">
           <thead className="border-b border-line">
             <tr>
               <th scope="col" className={`${TH} text-left`}>Strategy</th>
@@ -84,6 +88,8 @@ function ScenarioResults({ summary, scenario }: { summary: BenchSummary; scenari
               <th scope="col" className={`${TH} text-right`}>p99</th>
               <th scope="col" className={`${TH} text-right`}>Requests</th>
               <th scope="col" className={`${TH} text-right`}>Sold</th>
+              <th scope="col" className={`${TH} text-right`}>Orders paid</th>
+              <th scope="col" className={`${TH} text-right`}>VUs aborted</th>
               <th scope="col" className={`${TH} text-left`}>Invariants</th>
             </tr>
           </thead>
@@ -101,6 +107,8 @@ function ScenarioResults({ summary, scenario }: { summary: BenchSummary; scenari
                 <td className={TD}>
                   {formatNumber(run.ticketsSold)} / {formatNumber(run.seatsTotal)}
                 </td>
+                <td className={TD}>{ordersCell(run)}</td>
+                <td className={TD}>{run.vuAborted === undefined ? DASH : formatNumber(run.vuAborted)}</td>
                 <InvariantCell inv={run.invariants} />
               </tr>
             ))}
