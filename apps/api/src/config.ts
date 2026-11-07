@@ -20,6 +20,8 @@ export type Config = {
   /** Rate limits off and the X-Bench-Strategy header allowed. Load tests only. */
   benchMode: boolean;
   pgPoolMax: number;
+  /** How long a query may wait for a pooled connection before it fails (ms). */
+  pgConnectTimeoutMs: number;
   metricsToken: string;
   logLevel: LogLevel;
   cookieSecure: boolean;
@@ -68,6 +70,7 @@ const EnvSchema = z.object({
   HOLD_STRATEGY: StrategyNameSchema.default('conditional'),
   BENCH_MODE: flag,
   PG_POOL_MAX: z.coerce.number().int().min(1).max(500).default(20),
+  PG_CONNECT_TIMEOUT_MS: z.coerce.number().int().min(100).max(120_000).default(10_000),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   COOKIE_SECURE: flag,
   TRUST_PROXY: flag,
@@ -132,6 +135,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     holdStrategy: e.HOLD_STRATEGY,
     benchMode: e.BENCH_MODE,
     pgPoolMax: e.PG_POOL_MAX,
+    pgConnectTimeoutMs: e.PG_CONNECT_TIMEOUT_MS,
     logLevel: e.LOG_LEVEL,
     cookieSecure: e.COOKIE_SECURE,
     trustProxy: e.TRUST_PROXY,

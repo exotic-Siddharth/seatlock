@@ -39,6 +39,7 @@ x-api-env: &api-env
   TRUST_PROXY: "1"
   # Two replicas share Postgres's 200 connections with headroom left for the seeder and psql.
   PG_POOL_MAX: ${PG_POOL_MAX:-40}
+  PG_CONNECT_TIMEOUT_MS: ${PG_CONNECT_TIMEOUT_MS:-10000}
   LOG_LEVEL: ${LOG_LEVEL:-info}
 
 services:
