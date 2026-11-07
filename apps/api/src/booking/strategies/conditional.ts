@@ -1,7 +1,7 @@
 import type { StrategyName } from '@seatlock/shared';
 import type { Queryable } from '../../db';
 import { AVAILABLE_SQL } from '../../events/status';
-import { holdInTx, insertHold, lockBuyer, releasePreviousHold, SeatsTaken } from '../seats';
+import { holdInTx, insertHold, lockBuyer, releasePreviousHold, SeatsTaken, stampWon } from '../seats';
 import type { HoldInput, HoldStrategy, HoldSuccess } from './types';
 
 /**
@@ -31,7 +31,8 @@ export async function claimIfAvailable(
     const won = new Set(rows.map((r) => r.id));
     throw new SeatsTaken(input.seatIds.filter((id) => !won.has(id)));
   }
-  return { ok: true, hold, freed };
+  // The UPDATE may have waited for another buyer's release to commit: the hold starts now.
+  return { ok: true, hold: { ...hold, createdAt: await stampWon(c, hold.id) }, freed };
 }
 
 export const conditional: HoldStrategy = {

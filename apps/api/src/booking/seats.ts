@@ -34,7 +34,19 @@ export async function holdInTx(
 const HOLD_COLUMNS = `id, event_id AS "eventId", user_id AS "userId", seat_ids AS "seatIds",
   amount_paise AS "amountPaise", strategy, status, expires_at AS "expiresAt", created_at AS "createdAt"`;
 
-/** Inserts an active hold priced at the sum of its seats, expiring `ttlSec` from the database's now(). */
+/*
+ * Hold timestamps use clock_timestamp(), the moment of the statement, not now(), which is when
+ * the transaction began. A hold must not appear to start before the seats were really won: if a
+ * buyer's transaction begins, another buyer releases the seat and commits, and only then does
+ * the first win it, a now() stamp would make the two holds overlap on paper (the bench verifier
+ * counts that as a double promise).
+ */
+
+/**
+ * Inserts an active hold priced at the sum of its seats, expiring `ttlSec` from the database's
+ * now(). `created_at` is the moment of this statement, which is when pessimistic (already holding
+ * its row locks) and naive win their seats; the conditional claim restamps it with stampWon.
+ */
 export async function insertHold(
   c: Queryable,
   input: HoldInput,
@@ -42,13 +54,23 @@ export async function insertHold(
   id: string = randomUUID(),
 ): Promise<HoldRow> {
   const { rows } = await c.query<HoldRow>(
-    `INSERT INTO holds (id, event_id, user_id, seat_ids, amount_paise, strategy, expires_at)
-     SELECT $1::uuid, $2::uuid, $3::uuid, $4::bigint[], sum(price_paise), $5::text, now() + make_interval(secs => $6)
+    `INSERT INTO holds (id, event_id, user_id, seat_ids, amount_paise, strategy, expires_at, created_at)
+     SELECT $1::uuid, $2::uuid, $3::uuid, $4::bigint[], sum(price_paise), $5::text,
+            now() + make_interval(secs => $6), clock_timestamp()
        FROM event_seats WHERE event_id = $2 AND id = ANY($4)
      RETURNING ${HOLD_COLUMNS}`,
     [id, input.eventId, input.userId, input.seatIds, strategy, input.ttlSec],
   );
   return rows[0]!;
+}
+
+/** Restamps a hold's `created_at` to now, right after its seats were won; returns the stamp. */
+export async function stampWon(c: Queryable, holdId: string): Promise<Date> {
+  const { rows } = await c.query<{ createdAt: Date }>(
+    'UPDATE holds SET created_at = clock_timestamp() WHERE id = $1 RETURNING created_at AS "createdAt"',
+    [holdId],
+  );
+  return rows[0]!.createdAt;
 }
 
 /**
@@ -65,15 +87,35 @@ export async function markSeatsHeld(c: Queryable, hold: HoldRow): Promise<void> 
   );
 }
 
+const checkoutInProgress = () =>
+  new AppError('CHECKOUT_IN_PROGRESS', 'You are paying for seats on this event; finish or wait for the hold to end');
+
 /** A hold whose order awaits payment keeps its seats: the money for them may already be on its way. */
 export async function assertNotInCheckout(c: Queryable, holdIds: string[]): Promise<void> {
   const { rowCount } = await c.query(
     `SELECT 1 FROM orders WHERE hold_id = ANY($1) AND status = 'pending_payment'`,
     [holdIds],
   );
-  if (rowCount) {
-    throw new AppError('CHECKOUT_IN_PROGRESS', 'You are paying for seats on this event; finish or wait for the hold to end');
-  }
+  if (rowCount) throw checkoutInProgress();
+}
+
+/**
+ * The id of the buyer's unexpired active hold on the event, read without a lock: the redis
+ * strategy needs it before its Lua call, and its transaction re-checks everything under
+ * lockBuyer. Throws CHECKOUT_IN_PROGRESS just as releasePreviousHold would, so every strategy
+ * gives that answer ahead of any seat conflict.
+ */
+export async function peekPreviousHold(db: Queryable, userId: string, eventId: string): Promise<string | null> {
+  const { rows } = await db.query<{ id: string; paying: boolean }>(
+    `SELECT h.id, EXISTS (SELECT 1 FROM orders o WHERE o.hold_id = h.id AND o.status = 'pending_payment') AS paying
+       FROM holds h
+      WHERE h.user_id = $1 AND h.event_id = $2 AND h.status = 'active' AND h.expires_at > now()
+      ORDER BY h.created_at DESC
+      LIMIT 1`,
+    [userId, eventId],
+  );
+  if (rows[0]?.paying) throw checkoutInProgress();
+  return rows[0]?.id ?? null;
 }
 
 /**
@@ -113,7 +155,7 @@ export async function endHolds(c: Queryable, holdIds: string[], status: 'release
   if (holdIds.length === 0) return [];
   const { rows } = await c.query<FreedSeat>(
     `WITH ended AS (
-       UPDATE holds SET status = $2, ended_at = LEAST(now(), expires_at)
+       UPDATE holds SET status = $2, ended_at = LEAST(clock_timestamp(), expires_at)
         WHERE id = ANY($1) AND status = 'active'
        RETURNING id
      )

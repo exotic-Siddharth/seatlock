@@ -4,8 +4,10 @@ import type { HoldStrategy } from './types';
 
 /**
  * Lock first, then decide. SELECT ... FOR UPDATE makes every other buyer of these seats wait
- * for this transaction, and locking in id order means two buyers wanting overlapping seats
- * always queue in the same order, so they can't deadlock each other.
+ * for this transaction, and locking in id order makes two buyers who want overlapping seats
+ * queue in the same order instead of deadlocking. (Freeing a buyer's previous hold first locks
+ * its seats out of that order, so a rare deadlock is still possible; Postgres breaks it and
+ * withTx retries.) insertHold stamps created_at after the locks are granted.
  */
 export const pessimistic: HoldStrategy = {
   name: 'pessimistic',

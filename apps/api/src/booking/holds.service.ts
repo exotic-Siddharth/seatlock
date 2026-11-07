@@ -142,6 +142,7 @@ export async function releaseHold(deps: AppDeps, holdId: string, userId: string)
     const hold = rows[0];
     if (!hold) throw new AppError('NOT_FOUND', 'Hold not found');
     if (hold.status === 'converted') throw new AppError('HOLD_NOT_ACTIVE', 'These seats are already paid for');
+    if (hold.status !== 'active') return { eventId: hold.eventId, freed: [] }; // already over: nothing to do
     await assertNotInCheckout(c, [holdId]);
     return { eventId: hold.eventId, freed: await endHolds(c, [holdId], 'released') };
   });
