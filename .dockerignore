@@ -1,0 +1,16 @@
+# Keep the build context small and stop host build output or secrets leaking into images.
+.git
+**/node_modules
+**/dist
+**/coverage
+.env
+.env.*
+!.env.example
+.superpowers
+docs
+loadtest/results
+loadtest/.tokens.json
+apps/web/e2e
+apps/web/playwright-report
+apps/web/test-results
+**/*.log

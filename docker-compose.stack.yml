@@ -1,0 +1,110 @@
+# The full stack: nginx (static web + load balancer) in front of two API replicas.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.stack.yml --profile stack up -d --build
+#   -> http://localhost:8088
+#
+# This file extends docker-compose.yml and is a separate Compose project (`name:` below), with its
+# own Postgres and Redis containers and its own data volume, for two reasons:
+#   * it never touches the development containers (seatlock-postgres-1 / seatlock-redis-1) or their data;
+#   * benchmark data and sessions stay out of the development database.
+# The stack's Postgres and Redis publish no host ports, so they cannot clash with the development
+# ones on 55434 / 56381. Reach them with `docker compose ... exec postgres psql -U seatlock`.
+#
+# Profiles: `stack` runs web + api; `bench` adds the one-off tools used by loadtest/run-bench.sh (seeder, k6).
+#
+# Everything marked DEV ONLY below is a placeholder so the stack starts with no setup. Never reuse
+# these values anywhere real.
+
+name: seatlock-stack
+
+x-api-env: &api-env
+  NODE_ENV: production
+  PORT: "4200"
+  DATABASE_URL: postgres://seatlock:seatlock@postgres:5432/seatlock
+  REDIS_URL: redis://redis:6379/0
+  # Browser-facing origin: the cookie CSRF check compares the Origin header with this.
+  WEB_ORIGIN: http://localhost:8088
+  # DEV ONLY placeholders, each at least 32 characters.
+  QUEUE_TOKEN_SECRET: dev-only-queue-token-secret-do-not-reuse-0001
+  MOCKPAY_WEBHOOK_SECRET: dev-only-mockpay-webhook-secret-do-not-reuse-0002
+  METRICS_TOKEN: dev-only-metrics-token-do-not-reuse-000000003
+  SESSION_SECRET_PEPPER: dev-only-session-pepper-do-not-reuse-00000004
+  # MockPay calls its webhook through the load balancer, so a replica other than the one that took the payment may handle it.
+  MOCKPAY_WEBHOOK_URL: http://web/api/webhooks/mockpay
+  HOLD_STRATEGY: ${HOLD_STRATEGY:-conditional}
+  # 1 = rate limits off and X-Bench-Strategy honoured. loadtest/run-bench.sh sets it; a plain `up` leaves it off.
+  BENCH_MODE: ${BENCH_MODE:-0}
+  # Plain http on localhost, behind one proxy.
+  COOKIE_SECURE: "0"
+  TRUST_PROXY: "1"
+  # Two replicas share Postgres's 200 connections with headroom left for the seeder and psql.
+  PG_POOL_MAX: ${PG_POOL_MAX:-40}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+
+services:
+  # The base file publishes these on the host for local development; the stack does not need to.
+  postgres:
+    ports: !reset []
+  redis:
+    ports: !reset []
+
+  api:
+    profiles: [stack]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: seatlock-api:stack
+    environment: *api-env
+    deploy:
+      replicas: 2
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4200/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  web:
+    profiles: [stack]
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: seatlock-web:stack
+    ports:
+      - "8088:80"
+    depends_on:
+      api: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/api/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  # One-off tools, run with `docker compose ... run --rm -T seeder node dist/scripts/<script>.js`.
+  # Same image and settings as the API, plus the loadtest folder for the tokens file.
+  seeder:
+    profiles: [bench]
+    image: seatlock-api:stack
+    environment: *api-env
+    volumes:
+      - ./loadtest:/loadtest
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  # k6 on the Compose network, talking to nginx like any browser would.
+  k6:
+    profiles: [bench]
+    image: grafana/k6:latest
+    environment:
+      BASE_URL: http://web
+      TOKENS_FILE: /loadtest/.tokens.json
+    volumes:
+      - ./loadtest:/loadtest
+    depends_on:
+      web: { condition: service_healthy }
