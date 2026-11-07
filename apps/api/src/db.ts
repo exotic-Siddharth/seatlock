@@ -15,11 +15,11 @@ pg.types.setTypeParser(INT8_ARRAY_OID, (value: string) =>
 /** Anything that can run a query: the pool or a client checked out of it. */
 export type Queryable = Pick<pg.Pool, 'query'>;
 
-export function createPool(config: Pick<Config, 'databaseUrl' | 'pgPoolMax'>, log?: Logger): pg.Pool {
+export function createPool(config: Pick<Config, 'databaseUrl' | 'pgPoolMax' | 'pgConnectTimeoutMs'>, log?: Logger): pg.Pool {
   const pool = new pg.Pool({
     connectionString: config.databaseUrl,
     max: config.pgPoolMax,
-    connectionTimeoutMillis: 5_000,
+    connectionTimeoutMillis: config.pgConnectTimeoutMs,
   });
   // An idle client that loses its connection emits here; without a listener it would crash the process.
   pool.on('error', (err) => log?.error({ err }, 'idle Postgres client error'));
