@@ -52,7 +52,26 @@ async function connect(url: string) {
     }
   }
 
-  return { res, next, comments, close: () => abort.abort() };
+  /** Resolves once the server ends the stream. */
+  async function ended(timeoutMs: number): Promise<void> {
+    await expect(next('never-sent', timeoutMs)).rejects.toThrow('stream ended');
+  }
+
+  return { res, next, ended, comments, close: () => abort.abort() };
+}
+
+/** A hub of the test's own, on its own subscriber connection. */
+async function ownHub(opts: Parameters<typeof createSseHub>[3] = {}) {
+  const sub = ctx.deps.redis.duplicate();
+  const hub = createSseHub(sub, ctx.deps.log, ctx.deps.metrics, opts);
+  await hub.start();
+  return {
+    hub,
+    async dispose() {
+      await hub.stop();
+      sub.disconnect();
+    },
+  };
 }
 
 describe('SSE hub', () => {
@@ -91,9 +110,7 @@ describe('SSE hub', () => {
   });
 
   it('sends stats from the provider and heartbeats on their intervals', async () => {
-    const sub = ctx.deps.redis.duplicate();
-    const hub = createSseHub(sub, ctx.deps.log, ctx.deps.metrics, { statsMs: 50, heartbeatMs: 50 });
-    await hub.start();
+    const { hub, dispose } = await ownHub({ statsMs: 50, heartbeatMs: 50 });
     hub.setStatsProvider(async (id) => ({ eventId: id, available: 42 }));
     const eventId = randomUUID();
     const client = await connect(serve(hub, eventId));
@@ -103,7 +120,15 @@ describe('SSE hub', () => {
     await vi.waitFor(() => expect(client.comments).toContain('hb'));
 
     client.close();
+    await dispose();
+  });
+
+  it('ends open streams on stop, so a graceful shutdown is not held up', async () => {
+    const { hub, dispose } = await ownHub();
+    const client = await connect(serve(hub, randomUUID()));
     await hub.stop();
-    sub.disconnect();
+    await client.ended(1000);
+    expect(hub.clientCount()).toBe(0);
+    await dispose();
   });
 });
