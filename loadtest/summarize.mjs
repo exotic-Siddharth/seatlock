@@ -16,6 +16,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { z } from 'zod';
 import { BenchQueueSchema, BenchRunSchema, BenchSummarySchema, InvariantsSchema } from '@seatlock/shared';
 
 export const SCENARIOS = ['hot-seat', 'flash-sale'];
@@ -48,6 +49,14 @@ function trend(k6, name) {
 
 // ---------------------------------------------------------------- one scenario run
 
+const count = z.number().int().nonnegative();
+// TODO(I1): move into BenchRunSchema in @seatlock/shared as optional fields (see NOTES-integration.md).
+/** BenchRun plus the failures outside the hold call: the order and payment path, and VUs that gave up. */
+export const RunSchema = BenchRunSchema.extend({
+  orders: z.object({ created: count, paid: count, failed: count, errors: count, timeouts: count }).default({ created: 0, paid: 0, failed: 0, errors: 0, timeouts: 0 }),
+  vuAborted: count.default(0),
+});
+
 /** Builds and validates one BenchRun from the k6 export and the bench:verify output of that run. */
 export function buildRun({ scenario, strategy, vus, k6, verify }) {
   const latency = trend(k6, 'hold_latency');
@@ -75,8 +84,16 @@ export function buildRun({ scenario, strategy, vus, k6, verify }) {
     ticketsSold: verify.ticketsSold,
     seatsTotal: verify.seatsTotal,
     invariants: InvariantsSchema.parse(verify),
+    orders: {
+      created: counter(k6, 'orders_created'),
+      paid: counter(k6, 'orders_paid'),
+      failed: counter(k6, 'orders_failed'),
+      errors: counter(k6, 'orders_error'),
+      timeouts: counter(k6, 'orders_timeout'),
+    },
+    vuAborted: counter(k6, 'vu_aborted'),
   };
-  return BenchRunSchema.parse(run);
+  return RunSchema.parse(run);
 }
 
 // ---------------------------------------------------------------- waiting room
@@ -242,9 +259,15 @@ export function findProblems(summary) {
 
 /** Cautions that do not invalidate a result but must be read alongside it. */
 export function findWarnings(summary) {
-  return summary.runs
-    .filter((r) => r.holds.errors > 0)
-    .map((r) => `${r.scenario}/${r.strategy}: ${r.holds.errors} of ${r.holds.attempts} hold requests failed (not a 201 or 409), so its latency numbers mix in failures`);
+  const warnings = [];
+  for (const r of summary.runs) {
+    const id = `${r.scenario}/${r.strategy}`;
+    if (r.holds.errors > 0) warnings.push(`${id}: ${r.holds.errors} of ${r.holds.attempts} hold requests failed (not a 201 or 409), so its latency numbers mix in failures`);
+    if (r.orders?.errors > 0) warnings.push(`${id}: ${r.orders.errors} order or payment requests failed (not a 201 or 202)`);
+    if (r.orders?.timeouts > 0) warnings.push(`${id}: ${r.orders.timeouts} orders were still unpaid after 30 s (payment webhook did not arrive or was slow)`);
+    if (r.vuAborted > 0) warnings.push(`${id}: ${r.vuAborted} of ${r.vus} VUs aborted early (failed seat-map reads or repeated hold failures), so the load was lower than configured`);
+  }
+  return warnings;
 }
 
 const ms = (n) => (n >= 1000 ? `${round(n / 1000, 2)} s` : `${round(n)} ms`);
@@ -260,13 +283,15 @@ function invariantCell(run) {
   return notes.length > 0 ? `PASS (${notes.join(', ')})` : 'PASS';
 }
 
+const orderCell = (r) => (r.orders ? `${int(r.orders.paid)} / ${int(r.orders.failed)} / ${int(r.orders.errors)} / ${int(r.orders.timeouts)}` : '-');
+
 export function renderMarkdown(summary, problems, warnings, observedRate) {
   const m = summary.machine;
   const q = summary.queue;
   const rows = summary.runs.map((r) =>
     [
       r.scenario, r.strategy, int(r.vus), `${r.durationSec} s`, int(r.holds.attempts), int(r.holds.success),
-      int(r.holds.conflict), int(r.holds.errors), ms(r.holdLatencyMs.p50), ms(r.holdLatencyMs.p95), ms(r.holdLatencyMs.p99),
+      int(r.holds.conflict), int(r.holds.errors), orderCell(r), int(r.vuAborted ?? 0), ms(r.holdLatencyMs.p50), ms(r.holdLatencyMs.p95), ms(r.holdLatencyMs.p99),
       ms(r.holdLatencyMs.max), int(Math.round(r.httpReqsPerSec)), `${int(r.ticketsSold)} / ${int(r.seatsTotal)}`, invariantCell(r),
     ].join(' | '),
   );
@@ -283,8 +308,8 @@ export function renderMarkdown(summary, problems, warnings, observedRate) {
     '',
     '## Seat holds',
     '',
-    '| Scenario | Strategy | VUs | Duration | Hold attempts | 201 | 409 | Failed | p50 | p95 | p99 | max | HTTP req/s | Tickets sold / seats | Invariants |',
-    '|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|',
+    '| Scenario | Strategy | VUs | Duration | Hold attempts | 201 | 409 | Failed | Orders paid / failed / errors / timeouts | VUs aborted | p50 | p95 | p99 | max | HTTP req/s | Tickets sold / seats | Invariants |',
+    '|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|',
     ...rows.map((r) => `| ${r} |`),
     '',
     '## Waiting room',
@@ -310,7 +335,8 @@ export function renderMarkdown(summary, problems, warnings, observedRate) {
 }
 
 export function buildSummary({ runs, queue, machine }) {
-  return BenchSummarySchema.parse({ generatedAt: new Date().toISOString(), machine, runs, queue });
+  // The shared schema strips the order and abort fields, so validate with it and keep the full runs.
+  return { ...BenchSummarySchema.parse({ generatedAt: new Date().toISOString(), machine, runs, queue }), runs: runs.map((r) => RunSchema.parse(r)) };
 }
 
 // ---------------------------------------------------------------- CLI
@@ -351,7 +377,7 @@ function cmdSummary() {
   for (const scenario of SCENARIOS) {
     for (const strategy of STRATEGIES) {
       const file = path.join(resultsDir(), `${scenario}-${strategy}.json`);
-      if (existsSync(file)) runs.push(BenchRunSchema.parse(readJson(file)));
+      if (existsSync(file)) runs.push(RunSchema.parse(readJson(file)));
     }
   }
   const { observedAdmitRatePerSec, problems: queueProblems = [], ...queue } = readJson(path.join(resultsDir(), 'queue.json'));

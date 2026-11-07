@@ -24,6 +24,8 @@ const GROUPS = 150; // size of a VU's view of the map: keeps 2,000 VUs from each
 const PAY_TIMEOUT_MS = 30_000;
 const SUCCESS_CARD = { cardNumber: '4242424242424242', expiry: '12/34', cvc: '123', name: 'Bench Buyer' };
 
+const ordersCreated = new Counter('orders_created');
+const vuAborted = new Counter('vu_aborted');
 const ordersPaid = new Counter('orders_paid');
 const ordersFailed = new Counter('orders_failed');
 const ordersTimeout = new Counter('orders_timeout');
@@ -81,6 +83,7 @@ function pay(user, holdId, key) {
     reportUnexpected('POST /api/orders', created);
     return;
   }
+  ordersCreated.add(1);
   const confirm = post(
     `/api/mockpay/intents/${body.payment.intentId}/confirm`,
     user.token,
@@ -108,7 +111,13 @@ function pay(user, holdId, key) {
 
 export default function (data) {
   sleepUntil(data.startAt);
-  shop(data, userFor(__VU));
+  try {
+    shop(data, userFor(__VU));
+  } catch (err) {
+    // A failed seat-map read ends this VU; count it so a degraded run cannot look clean.
+    vuAborted.add(1);
+    console.error(`VU ${__VU} aborted: ${err}`);
+  }
   runMs.add(Date.now() - data.startAt);
 }
 
@@ -135,7 +144,10 @@ function shop(data, user) {
       conflicts++;
       sleep(0.02 + Math.random() * 0.1);
     } else if (result.outcome === 'error') {
-      if (++errors >= 10) return; // the API is not answering: stop instead of hammering it
+      if (++errors >= 10) {
+        vuAborted.add(1); // the API is not answering: stop instead of hammering it
+        return;
+      }
       sleep(0.25 + Math.random() * 0.5);
     } else {
       conflicts = 0;
