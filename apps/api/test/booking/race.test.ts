@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { verifyEvent } from '../../src/bench/verify';
 import { getStrategy } from '../../src/booking/strategies';
+import { createNaive } from '../../src/booking/strategies/naive';
 import { createOnSaleEvent, createVenue, makeCtx, resetState, type TestCtx } from '../helpers';
 import { gridLayout, insertUsers } from './fixtures';
 
@@ -97,5 +99,48 @@ describe.each(['pessimistic', 'conditional', 'redis'] as const)('%s under conten
     expect(active.rowCount).toBe(1);
     const held = await ctx.deps.db.query(`SELECT 1 FROM event_seats WHERE event_id = $1 AND status = 'held'`, [eventId]);
     expect(held.rowCount).toBe(1);
+  });
+});
+
+/** Resolves for everyone once `n` callers have arrived. */
+function barrier(n: number): () => Promise<void> {
+  let arrived = 0;
+  let open!: () => void;
+  const opened = new Promise<void>((resolve) => (open = resolve));
+  return () => {
+    if (++arrived === n) open();
+    return opened;
+  };
+}
+
+/*
+ * The Lab and the README rest on naive being unsafe, so CI proves it. Each racer is held
+ * between naive's availability check and its write until all 200 have checked: the window
+ * naive leaves open, held open on purpose, so the outcome does not depend on how the pool
+ * happens to schedule the queries. A naive that became safe (a lock, a transaction or a
+ * condition on the write) would either let only one through or never get past the barrier.
+ */
+describe('naive under contention', () => {
+  it('lets more than one of 200 users "win" the same 3 seats, and the bench verifier sees the double promise', async () => {
+    const { eventId, seatIds } = await createOnSaleEvent(ctx);
+    const hot = seatIds.slice(0, 3);
+    const users = await insertUsers(ctx, 200);
+    const naive = createNaive({ betweenCheckAndWrite: barrier(users.length) });
+
+    const results = await Promise.all(
+      users.map((userId) => naive.hold(ctx.deps, { eventId, userId, seatIds: hot, ttlSec: 300 })),
+    );
+
+    expect(results.filter((r) => r.ok).length).toBeGreaterThan(1);
+    const { rows } = await ctx.deps.db.query<{ n: number }>(
+      `SELECT count(*) AS n FROM holds WHERE event_id = $1 AND status = 'active' AND seat_ids && $2::bigint[]`,
+      [eventId, hot],
+    );
+    expect(rows[0]!.n).toBeGreaterThan(1);
+    expect(await verifyEvent(ctx.deps.db, eventId, { strategy: 'naive' })).toMatchObject({
+      doublePromisedSeats: 3,
+      oversoldSeats: 0,
+      pass: true,
+    });
   });
 });
