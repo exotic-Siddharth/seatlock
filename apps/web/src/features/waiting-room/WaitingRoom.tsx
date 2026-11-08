@@ -108,7 +108,9 @@ export function WaitingRoom({ eventId, queue, saleOpensAt, clock, onJoin, joinin
 
         {state === 'waiting' && queue && (
           <div className="flex w-full flex-col gap-4">
-            {queue.position === null ? (
+            {/* Before the sale the API's place is only a lottery score that moves as others join
+                (queue.js needs it); showing it would contradict "you keep your place". */}
+            {beforeSale || queue.position === null ? (
               <p className="text-muted">Your place is drawn when the sale opens.</p>
             ) : (
               <div>
@@ -119,9 +121,11 @@ export function WaitingRoom({ eventId, queue, saleOpensAt, clock, onJoin, joinin
                 </p>
               </div>
             )}
-            <Progress eventId={eventId} queue={queue} />
+            {!beforeSale && <Progress eventId={eventId} queue={queue} />}
             <ul className="flex flex-col items-center gap-2 sm:flex-row sm:justify-center sm:gap-6">
-              <Fact icon={<Clock aria-hidden />}>{waitText(queue.estimatedWaitSec)}</Fact>
+              <Fact icon={<Clock aria-hidden />}>
+                {beforeSale ? 'Admission starts when the sale opens' : waitText(queue.estimatedWaitSec)}
+              </Fact>
               <Fact icon={<Gauge aria-hidden />}>Admitting {formatNumber(queue.admitRatePerSec)} people per second</Fact>
               <Fact icon={<Users aria-hidden />}>{formatNumber(queue.queueLength)} in line</Fact>
             </ul>
@@ -182,7 +186,8 @@ export function WaitingRoom({ eventId, queue, saleOpensAt, clock, onJoin, joinin
         {state === 'waiting' && (
           <p className="max-w-md text-sm text-balance text-muted">
             <RefreshCw aria-hidden className="mr-1.5 inline size-4 align-[-3px]" />
-            Refreshing is safe: you keep your place. The seat map opens by itself when it's your turn.
+            {beforeSale ? 'Refreshing is safe: you stay in the draw.' : 'Refreshing is safe: you keep your place.'} The seat map opens by
+            itself when it's your turn.
           </p>
         )}
       </div>
