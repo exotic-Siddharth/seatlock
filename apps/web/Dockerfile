@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Build context is the repository root: docker build -f apps/web/Dockerfile .
 
-FROM node:22-alpine AS build
+FROM node:22.23.4-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/
@@ -17,7 +17,7 @@ COPY loadtest/ loadtest/
 RUN npm run build -w @seatlock/web
 
 # nginx serves the SPA and load-balances /api across the API replicas.
-FROM nginx:alpine AS runtime
+FROM nginx:1.31.8-alpine AS runtime
 COPY infra/nginx.conf /etc/nginx/nginx.conf
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html
 EXPOSE 80
