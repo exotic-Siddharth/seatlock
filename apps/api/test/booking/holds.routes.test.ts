@@ -173,8 +173,17 @@ describe('POST /api/holds', () => {
       const req = request(ctx.app).post('/api/holds').set(alice.bearer);
       return (token === undefined ? req : req.set('X-Queue-Token', token)).send({ eventId, seatIds: [seatId] });
     };
-    const token = (eventId: string, userId: string, expInMs = 60_000) =>
-      signQueueToken(ctx.deps.config.queueTokenSecret, { e: eventId, u: userId, exp: Date.now() + expInMs });
+    const saleOpensAt = async (eventId: string) => {
+      const { rows } = await ctx.deps.db.query<{ at: Date }>('SELECT sale_opens_at AS at FROM events WHERE id = $1', [eventId]);
+      return rows[0]!.at.getTime();
+    };
+    const token = async (eventId: string, userId: string, expInMs = 60_000) =>
+      signQueueToken(ctx.deps.config.queueTokenSecret, {
+        e: eventId,
+        u: userId,
+        exp: Date.now() + expInMs,
+        s: await saleOpensAt(eventId),
+      });
 
     it('answers 403 QUEUE_REQUIRED without a token', async () => {
       const { eventId, seatIds } = await createOnSaleEvent(ctx, { queueEnabled: true });
@@ -185,7 +194,7 @@ describe('POST /api/holds', () => {
 
     it('answers 403 QUEUE_TOKEN_INVALID for a forged, expired or borrowed token', async () => {
       const { eventId, seatIds } = await createOnSaleEvent(ctx, { queueEnabled: true });
-      for (const bad of ['not-a-token', token(eventId, alice.user.id, -1), token(eventId, bob.user.id)]) {
+      for (const bad of ['not-a-token', await token(eventId, alice.user.id, -1), await token(eventId, bob.user.id)]) {
         const res = await withToken(bad, eventId, seatIds[0]!);
         expect(res.status).toBe(403);
         expect(res.body.error.code).toBe('QUEUE_TOKEN_INVALID');
@@ -194,8 +203,21 @@ describe('POST /api/holds', () => {
 
     it('holds with a valid token', async () => {
       const { eventId, seatIds } = await createOnSaleEvent(ctx, { queueEnabled: true });
-      const res = await withToken(token(eventId, alice.user.id), eventId, seatIds[0]!);
+      const res = await withToken(await token(eventId, alice.user.id), eventId, seatIds[0]!);
       expect(res.status).toBe(201);
+    });
+
+    it('refuses a token issued before an admin reopened the sale', async () => {
+      const { eventId, seatIds } = await createOnSaleEvent(ctx, { queueEnabled: true });
+      const old = await token(eventId, alice.user.id);
+      // What "Reopen sale" does: a new sale_opens_at, and the queue keys cleared.
+      await ctx.deps.db.query(`UPDATE events SET sale_opens_at = now() - interval '1 second' WHERE id = $1`, [eventId]);
+
+      const res = await withToken(old, eventId, seatIds[0]!);
+
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('QUEUE_TOKEN_INVALID');
+      expect((await withToken(await token(eventId, alice.user.id), eventId, seatIds[0]!)).status).toBe(201);
     });
   });
 
