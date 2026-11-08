@@ -28,7 +28,6 @@ x-api-env: &api-env
   QUEUE_TOKEN_SECRET: dev-only-queue-token-secret-do-not-reuse-0001
   MOCKPAY_WEBHOOK_SECRET: dev-only-mockpay-webhook-secret-do-not-reuse-0002
   METRICS_TOKEN: dev-only-metrics-token-do-not-reuse-000000003
-  SESSION_SECRET_PEPPER: dev-only-session-pepper-do-not-reuse-00000004
   # MockPay calls its webhook through the load balancer, so a replica other than the one that took the payment may handle it.
   MOCKPAY_WEBHOOK_URL: http://web/api/webhooks/mockpay
   HOLD_STRATEGY: ${HOLD_STRATEGY:-conditional}

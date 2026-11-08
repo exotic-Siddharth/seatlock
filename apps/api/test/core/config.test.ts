@@ -40,7 +40,6 @@ describe('loadConfig', () => {
       PG_CONNECT_TIMEOUT_MS: '30000',
       MOCKPAY_LATENCY_MS: '5-10',
       HOLD_STRATEGY: 'naive',
-      SESSION_SECRET_PEPPER: '',
     });
     expect(config).toMatchObject({
       port: 5000,
@@ -51,8 +50,22 @@ describe('loadConfig', () => {
       pgConnectTimeoutMs: 30_000,
       mockpayLatencyMs: { min: 5, max: 10 },
       holdStrategy: 'naive',
-      sessionSecretPepper: undefined,
     });
+  });
+
+  it('has no session pepper: a SHA-256 of a 256-bit random token needs none, so no knob suggests one', () => {
+    const config = loadConfig({ SESSION_SECRET_PEPPER: 'short' });
+    expect(Object.keys(config).some((key) => /pepper/i.test(key))).toBe(false);
+    // Not validated any more either: production does not refuse a short leftover value.
+    expect(() =>
+      loadConfig({
+        NODE_ENV: 'production',
+        QUEUE_TOKEN_SECRET: 'q'.repeat(32),
+        MOCKPAY_WEBHOOK_SECRET: 'm'.repeat(32),
+        METRICS_TOKEN: 't'.repeat(32),
+        SESSION_SECRET_PEPPER: 'short',
+      }),
+    ).not.toThrow();
   });
 
   it('rejects invalid values', () => {
