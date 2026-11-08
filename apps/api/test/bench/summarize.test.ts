@@ -1,3 +1,4 @@
+import { BenchSummarySchema } from '@seatlock/shared';
 import { describe, expect, it } from 'vitest';
 
 // loadtest/summarize.mjs is plain JavaScript outside this package, so load it by URL (and type the bits used here).
@@ -18,9 +19,16 @@ type Summarize = {
   };
   findProblems(summary: unknown): string[];
   findWarnings(summary: unknown): string[];
+  buildSummary(input: { runs: unknown[]; queue: unknown; machine: unknown; queueProblems?: string[] }): {
+    runs: unknown[];
+    problems?: string[];
+    warnings?: string[];
+  };
 };
 const specifier = new URL('../../../../loadtest/summarize.mjs', import.meta.url).href;
-const { parseVuLines, checkAdmissionOrder, buildRun, findProblems, findWarnings } = (await import(/* @vite-ignore */ specifier)) as Summarize;
+const { parseVuLines, checkAdmissionOrder, buildRun, findProblems, findWarnings, buildSummary } = (await import(
+  /* @vite-ignore */ specifier
+)) as Summarize;
 
 const user = (pos0: number, lastWaitSent: number | null, admittedAt: number | null): VuRecord => ({
   vu: pos0,
@@ -174,6 +182,28 @@ describe('findProblems', () => {
     const missing = { ...complete(), runs: complete().runs.slice(1) };
     expect(findProblems(missing)).toEqual(['hot-seat/naive: no result']);
     expect(findProblems({ ...complete(), queue: { outOfOrderAdmissions: 2 } }).join(' ')).toMatch(/2 users were overtaken/);
+  });
+
+  describe('buildSummary (what summary.json holds)', () => {
+    const machine = { cpu: 'Test CPU', logicalCores: 8, ramGb: 32, dockerCpus: 8, dockerMemGb: 16, apiReplicas: 2, notes: '' };
+    const queue = { vus: 3000, joinP95Ms: 5, pollP95Ms: 6, admitRatePerSec: 200, outOfOrderAdmissions: 0, admittedTotal: 3000 };
+
+    it('carries the verdict, so the Lab can see a run that must not be published', () => {
+      const nobodyWon = run('hot-seat', 'conditional', { holds: { attempts: 1000, success: 0, conflict: 0, errors: 1000 } });
+      const summary = buildSummary({ runs: complete(nobodyWon).runs, queue, machine, queueProblems: ['12 of 3000 users were never admitted'] });
+
+      expect(summary.problems).toEqual([
+        'hot-seat/conditional: 0 holds succeeded on the same 4 seats, expected exactly 1',
+        'queue: 12 of 3000 users were never admitted',
+      ]);
+      expect(summary.warnings).toEqual([expect.stringMatching(/^hot-seat\/conditional: 1000 of 1000 hold requests failed/)]);
+      expect(BenchSummarySchema.parse(summary)).toEqual(summary);
+    });
+
+    it('writes empty lists for a clean, complete set of results', () => {
+      const summary = buildSummary({ runs: complete().runs, queue, machine });
+      expect(summary).toMatchObject({ problems: [], warnings: [] });
+    });
   });
 
   it('warns, without failing, about hold requests that errored', () => {
