@@ -1,12 +1,13 @@
 import type { Hold } from '@seatlock/shared';
 import { useQueryClient } from '@tanstack/react-query';
-import { CircleX, Clock4, Hourglass, Undo2 } from 'lucide-react';
+import { Clock4, Hourglass, Undo2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router';
 import { Button, Card, EmptyState, Modal, Skeleton, Spinner, buttonClass, useToast } from '../components/ui';
 import { HoldSummary } from '../features/checkout/HoldSummary';
 import { MockPayForm } from '../features/checkout/MockPayForm';
-import { useHold, useReleaseHold } from '../features/checkout/queries';
+import { OrderEnded } from '../features/checkout/OrderEnded';
+import { useHold, useOrder, useReleaseHold } from '../features/checkout/queries';
 import { usePayment } from '../features/checkout/usePayment';
 import { LoadError } from '../features/events/LoadError';
 import { seatsQueryKey } from '../hooks/useSeatSnapshot';
@@ -34,18 +35,39 @@ export default function Checkout() {
   }
   const data = hold.data;
   if (data.status === 'converted' && data.orderId) return <Navigate to={`/orders/${data.orderId}`} replace />;
-  if (data.status === 'released') {
+  if (data.orderId && (data.status === 'released' || data.status === 'expired')) {
+    return <EndedCheckout hold={data} orderId={data.orderId} receivedAt={hold.dataUpdatedAt} />;
+  }
+  return <OpenCheckout hold={data} receivedAt={hold.dataUpdatedAt} />;
+}
+
+/** A hold that is still open, or one that ended with no order to explain it. */
+function OpenCheckout({ hold, receivedAt }: { hold: Hold; receivedAt: number }) {
+  if (hold.status === 'released') {
     return (
       <EmptyState
         icon={<Undo2 aria-hidden />}
         title="You released these seats"
         body="They went back on sale for everyone."
-        action={<BackToMap hold={data} />}
+        action={<BackToMap hold={hold} />}
       />
     );
   }
   // Keyed by hold so a new hold starts a fresh payment (and a fresh order idempotency key).
-  return <CheckoutView key={data.id} hold={data} receivedAt={hold.dataUpdatedAt} />;
+  return <CheckoutView key={hold.id} hold={hold} receivedAt={receivedAt} />;
+}
+
+/**
+ * A hold that ended after an order was placed for it: its order says what happened (released,
+ * replaced, expired, or refunded because the seats went to someone else). An order still
+ * pending, a payment that outlived the hold, keeps the usual view; useOrder polls it until it settles.
+ */
+function EndedCheckout({ hold, orderId, receivedAt }: { hold: Hold; orderId: string; receivedAt: number }) {
+  const order = useOrder(orderId);
+  if (order.isPending) return <CheckoutSkeleton />;
+  if (order.data?.status === 'paid') return <Navigate to={`/orders/${orderId}`} replace />;
+  if (order.data?.status === 'failed') return <OrderEnded reason={order.data.failureReason} eventSlug={hold.eventSlug} />;
+  return <OpenCheckout hold={hold} receivedAt={receivedAt} />;
 }
 
 function BackToMap({ hold }: { hold: Hold }) {
@@ -68,11 +90,10 @@ function CheckoutView({ hold, receivedAt }: { hold: Hold; receivedAt: number }) 
   const [confirmRelease, setConfirmRelease] = useState(false);
 
   const { state } = payment;
+  // A payment in flight. It is the only time the API refuses a release; a declined card leaves Release open.
   const busy = state.step === 'paying' || state.step === 'processing';
 
-  if (state.step === 'failed') {
-    return <EmptyState icon={<CircleX aria-hidden />} title="Payment failed" body={state.message} action={<BackToMap hold={hold} />} />;
-  }
+  if (state.step === 'failed') return <OrderEnded reason={state.reason} eventSlug={hold.eventSlug} />;
   // While a payment is in flight the clock may run out, but a payment that arrives late can
   // still sell the seats if nobody else took them, so we wait for its outcome instead.
   if ((done || hold.status === 'expired') && !busy && state.step !== 'slow') {
@@ -141,6 +162,7 @@ function CheckoutView({ hold, receivedAt }: { hold: Hold; receivedAt: number }) 
             clock={clock}
             urgent={msLeft < URGENT_MS}
             canRelease={!busy && !release.isPending}
+            releaseHint={busy ? 'You can release the seats once this payment finishes.' : undefined}
             onRelease={() => setConfirmRelease(true)}
           />
         </div>

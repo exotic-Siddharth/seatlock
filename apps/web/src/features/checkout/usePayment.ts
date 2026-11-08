@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { ApiError, api, errorMessage, newIdempotencyKey } from '../../lib/api';
-import { declineMessage, failureMessage, type CardForm } from './card';
+import { declineMessage, type CardForm } from './card';
 import { holdKey, orderKey } from './queries';
 
 export type PaymentState =
@@ -15,8 +15,8 @@ export type PaymentState =
   | { step: 'processing' }
   /** No outcome within the polling window. The payment may still go through. */
   | { step: 'slow' }
-  /** The order failed for good (for example, the hold was lost and the payment refunded). */
-  | { step: 'failed'; message: string };
+  /** The order failed for good (for example, the hold was lost and the payment refunded); `reason` is its failureReason. */
+  | { step: 'failed'; reason: string | null };
 
 const POLL_EVERY_MS = 1_000;
 const POLL_FOR_MS = 15_000;
@@ -69,7 +69,7 @@ export function usePayment(hold: Hold) {
       if (!order) return setState({ step: 'slow' });
       queryClient.setQueryData(orderKey(order.id), { order });
       if (order.status === 'paid') return navigate(`/orders/${order.id}`, { replace: true });
-      if (order.status === 'failed') return setState({ step: 'failed', message: failureMessage(order.failureReason) });
+      if (order.status === 'failed') return setState({ step: 'failed', reason: order.failureReason });
       setState({ step: 'ready', error: declineMessage(order.lastPaymentError!) });
     },
     [navigate, queryClient],

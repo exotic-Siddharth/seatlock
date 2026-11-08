@@ -8,7 +8,7 @@ import NotFound from '../../src/pages/NotFound';
 import OrderConfirmation from '../../src/pages/OrderConfirmation';
 import Tickets from '../../src/pages/Tickets';
 import { renderWithProviders } from '../render';
-import { FAN, ORDER_ID, makeEvent, makeOrder } from './fixtures';
+import { FAN, HOLD_ID, ORDER_ID, makeEvent, makeOrder } from './fixtures';
 import { mockApi } from './mocks';
 
 const ticket = (n: number, overrides: Partial<Ticket> = {}): Ticket => ({
@@ -116,6 +116,24 @@ describe('OrderConfirmation', () => {
     renderOrder();
     expect(await screen.findByRole('heading', { name: 'Payment failed' })).toBeTruthy();
   });
+
+  it('shows a released order as released, with no spinner and no "pending"', async () => {
+    mockApi({ [`GET /api/orders/${ORDER_ID}`]: [200, { order: makeOrder({ status: 'failed', failureReason: 'RELEASED' }) }] });
+    renderOrder();
+    expect(await screen.findByRole('heading', { name: 'You released these seats' })).toBeTruthy();
+    expect(screen.getByText(/not charged/)).toBeTruthy();
+    expect(document.querySelector('.animate-spin')).toBeNull();
+    expect(screen.queryByText(/pending/i)).toBeNull();
+  });
+
+  it('shows a declined order still open for payment without a spinner', async () => {
+    mockApi({ [`GET /api/orders/${ORDER_ID}`]: [200, { order: makeOrder({ lastPaymentError: 'card_declined' }) }] });
+    renderOrder();
+    expect(await screen.findByRole('heading', { name: 'Payment not completed' })).toBeTruthy();
+    expect(screen.getByText(/Your card was declined/)).toBeTruthy();
+    expect(document.querySelector('.animate-spin')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Back to checkout' }).getAttribute('href')).toBe(`/checkout/${HOLD_ID}`);
+  });
 });
 
 describe('Tickets', () => {
@@ -131,6 +149,14 @@ describe('Tickets', () => {
     expect(await screen.findAllByRole('img', { name: /^QR code for ticket/ })).toHaveLength(2);
     expect(screen.getByText('Checked in')).toBeTruthy();
     expect(screen.getAllByText('Payment failed').length).toBeGreaterThan(0);
+  });
+
+  it('labels an order that ended unpaid as cancelled, not as a failed or pending payment', async () => {
+    mockApi({ 'GET /api/orders': [200, { items: [makeOrder({ status: 'failed', failureReason: 'HOLD_EXPIRED' })] }] });
+    renderWithProviders(<Tickets />, { user: FAN });
+    expect(await screen.findByText('Cancelled')).toBeTruthy();
+    expect(screen.getByText(/hold ran out/)).toBeTruthy();
+    expect(screen.queryByText(/Payment (failed|pending)/)).toBeNull();
   });
 
   it('shows an empty state', async () => {

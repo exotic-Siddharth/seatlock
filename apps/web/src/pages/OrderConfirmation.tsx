@@ -1,8 +1,9 @@
 import type { Order } from '@seatlock/shared';
-import { CalendarDays, CircleCheck, CircleX, MapPin } from 'lucide-react';
+import { CalendarDays, CircleAlert, CircleCheck, MapPin } from 'lucide-react';
 import { Link, useParams } from 'react-router';
 import { EmptyState, Skeleton, Spinner, buttonClass } from '../components/ui';
-import { declineMessage, failureMessage } from '../features/checkout/card';
+import { OrderEnded } from '../features/checkout/OrderEnded';
+import { declineMessage } from '../features/checkout/card';
 import { useOrder } from '../features/checkout/queries';
 import { LoadError } from '../features/events/LoadError';
 import { TicketStub } from '../features/tickets/TicketStub';
@@ -41,28 +42,16 @@ export default function OrderConfirmation() {
 }
 
 function OrderView({ order }: { order: Order }) {
-  if (order.status === 'failed') {
-    return (
-      <EmptyState
-        icon={<CircleX aria-hidden />}
-        title="Payment failed"
-        body={failureMessage(order.failureReason)}
-        action={
-          <Link to={`/events/${order.eventSlug}`} className={buttonClass('primary')}>
-            Back to the seat map
-          </Link>
-        }
-      />
-    );
-  }
+  if (order.status === 'failed') return <OrderEnded reason={order.failureReason} eventSlug={order.eventSlug} />;
   if (order.status === 'pending_payment') {
+    // A declined card is an outcome, not something in progress: no spinner for it.
     return (
       <EmptyState
-        icon={<Spinner />}
+        icon={order.lastPaymentError ? <CircleAlert aria-hidden /> : <Spinner />}
         title={order.lastPaymentError ? 'Payment not completed' : 'Confirming your payment'}
         body={
           order.lastPaymentError
-            ? `${declineMessage(order.lastPaymentError)} Your seats are held until the timer at checkout runs out.`
+            ? `${declineMessage(order.lastPaymentError)} You can try another card at checkout until your hold runs out.`
             : 'MockPay is confirming your card. This page updates by itself.'
         }
         action={

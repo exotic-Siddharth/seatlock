@@ -3,9 +3,21 @@ import { getStrategy } from '../../src/booking/strategies';
 import { seatKey } from '../../src/booking/strategies/redis';
 import { startSweeper, sweepOnce } from '../../src/booking/sweeper';
 import { createOnSaleEvent, createUser, makeCtx, resetState, type TestCtx } from '../helpers';
-import { expireHold, holdStatus, postHold, postOrder, seatRows, sendWebhook, waitFor, type Bearer } from './fixtures';
+import {
+  expireHold,
+  holdStatus,
+  orderState,
+  postHold,
+  postOrder,
+  seatRows,
+  sendWebhook,
+  startPayment as startPaymentFor,
+  waitFor,
+  type Bearer,
+} from './fixtures';
 
 let ctx: TestCtx;
+const startPayment = (orderId: string, secondsAgo: number) => startPaymentFor(ctx, orderId, secondsAgo);
 let alice: { user: { id: string }; bearer: Bearer };
 let bob: { user: { id: string }; bearer: Bearer };
 
@@ -32,15 +44,6 @@ async function lapsedWithOrder(holdId: string) {
     [order.body.order.id],
   );
   return { orderId: order.body.order.id as string, intentId: order.body.payment.intentId as string };
-}
-
-/** What MockPay's confirm records: an attempt in flight since `secondsAgo`. */
-async function startPayment(orderId: string, secondsAgo: number) {
-  await ctx.deps.db.query(
-    `UPDATE payment_intents SET status = 'processing', attempts = attempts + 1, updated_at = now() - make_interval(secs => $2)
-      WHERE order_id = $1`,
-    [orderId, secondsAgo],
-  );
 }
 
 async function heldHold(seatCount = 2, bearer: Bearer = alice.bearer) {
@@ -78,23 +81,41 @@ describe('sweepOnce', () => {
     await startPayment(orderId, 0);
 
     await sweepOnce(ctx.deps);
-    const whilePaying = { hold: await holdStatus(ctx, holdId), seat: (await seatRows(ctx, seats))[0]!.status };
+    const whilePaying = {
+      hold: await holdStatus(ctx, holdId),
+      seat: (await seatRows(ctx, seats))[0]!.status,
+      order: (await orderState(ctx, orderId))?.status,
+    };
     await startPayment(orderId, 61); // the webhook is long overdue
     await sweepOnce(ctx.deps);
 
-    expect(whilePaying).toEqual({ hold: 'active', seat: 'held' });
+    expect(whilePaying).toEqual({ hold: 'active', seat: 'held', order: 'pending_payment' });
     expect(await holdStatus(ctx, holdId)).toBe('expired');
     expect((await seatRows(ctx, seats))[0]!.status).toBe('available');
+    expect(await orderState(ctx, orderId)).toEqual({ status: 'failed', failureReason: 'HOLD_EXPIRED', intent: 'failed' });
   });
 
-  it('expires a lapsed hold whose order has no payment in flight', async () => {
+  it('expires a lapsed hold whose order has no payment in flight, and fails that order with HOLD_EXPIRED', async () => {
     const { seats, holdId } = await heldHold(1);
-    await lapsedWithOrder(holdId);
+    const { orderId } = await lapsedWithOrder(holdId);
 
     await sweepOnce(ctx.deps);
 
     expect(await holdStatus(ctx, holdId)).toBe('expired');
     expect((await seatRows(ctx, seats))[0]!.status).toBe('available');
+    expect(await orderState(ctx, orderId)).toEqual({ status: 'failed', failureReason: 'HOLD_EXPIRED', intent: 'failed' });
+  });
+
+  it('fails the order of a lapsed hold after a declined card, keeping the decline code', async () => {
+    const { holdId } = await heldHold(1);
+    const { orderId, intentId } = await lapsedWithOrder(holdId);
+    await sendWebhook(ctx, { type: 'payment_intent.failed', intentId, failureCode: 'card_declined' });
+
+    await sweepOnce(ctx.deps);
+
+    expect(await orderState(ctx, orderId)).toEqual({ status: 'failed', failureReason: 'HOLD_EXPIRED', intent: 'failed' });
+    const { rows } = await ctx.deps.db.query('SELECT failure_code FROM payment_intents WHERE id = $1', [intentId]);
+    expect(rows[0]).toEqual({ failure_code: 'card_declined' });
   });
 
   it('lets a payment still processing at expiry sell the seats when its webhook lands after a sweep', async () => {

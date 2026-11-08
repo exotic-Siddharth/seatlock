@@ -57,9 +57,35 @@ export function declineMessage(code: string): string {
   return `The payment did not go through (${code}).`;
 }
 
+/** Reasons an order ends without a payment: its hold ended first, and nobody was charged. */
+const ENDED_UNPAID = new Set(['RELEASED', 'REPLACED', 'HOLD_EXPIRED']);
+
+/** True when the order ended before any payment went through (released, replaced or expired). */
+export const endedUnpaid = (reason: string | null): boolean => reason !== null && ENDED_UNPAID.has(reason);
+
+/** A heading for an order that failed for good. */
+export function failureTitle(reason: string | null): string {
+  switch (reason) {
+    case 'RELEASED':
+      return 'You released these seats';
+    case 'REPLACED':
+      return 'You picked other seats';
+    case 'HOLD_EXPIRED':
+      return 'Your hold expired';
+    default:
+      return 'Payment failed';
+  }
+}
+
 /** Why an order failed for good. */
 export function failureMessage(reason: string | null): string {
   switch (reason) {
+    case 'RELEASED':
+      return 'You gave these seats back before paying, so they went back on sale. You were not charged.';
+    case 'REPLACED':
+      return 'You held other seats for this event, so these went back on sale. You were not charged.';
+    case 'HOLD_EXPIRED':
+      return 'Your hold ran out before a payment went through, so the seats went back on sale. You were not charged.';
     case 'HOLD_LOST':
       return 'Your hold ran out before the payment arrived, and the seats went to someone else. The payment was refunded.';
     case 'SEAT_ALREADY_SOLD':

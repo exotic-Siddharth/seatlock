@@ -87,16 +87,64 @@ export async function markSeatsHeld(c: Queryable, hold: HoldRow): Promise<void> 
   );
 }
 
-const checkoutInProgress = () =>
-  new AppError('CHECKOUT_IN_PROGRESS', 'You are paying for seats on this event; finish or wait for the hold to end');
+/**
+ * A payment is in flight for the intent aliased `pi`: MockPay accepted a card for it less than
+ * 60 s ago and its webhook has not landed yet. While this holds, the hold keeps its seats, so
+ * the money on its way can still buy them. It is the sweeper's grace (spec §7.3) and the only
+ * case in which a buyer cannot give seats back (see the Decisions log).
+ */
+export const PAYMENT_IN_FLIGHT_SQL = (pi: string) =>
+  `(${pi}.status = 'processing' AND ${pi}.updated_at > now() - interval '60 seconds')`;
 
-/** A hold whose order awaits payment keeps its seats: the money for them may already be on its way. */
-export async function assertNotInCheckout(c: Queryable, holdIds: string[]): Promise<void> {
-  const { rowCount } = await c.query(
-    `SELECT 1 FROM orders WHERE hold_id = ANY($1) AND status = 'pending_payment'`,
+/** Why an unpaid order failed: its hold ended before anyone paid. */
+export type CheckoutEnd = 'RELEASED' | 'REPLACED' | 'HOLD_EXPIRED';
+
+const checkoutInProgress = () =>
+  new AppError('CHECKOUT_IN_PROGRESS', 'A payment for your seats on this event is still processing; wait a moment for it to finish');
+
+/*
+ * Lock order wherever a checkout is touched: hold, then order, then payment intent, then seats
+ * (order creation, release, the sweeper, the webhook). Confirm locks only the order and the
+ * intent, in that order. Taken the same way round, two of them never wait on each other in a cycle.
+ */
+
+/**
+ * Ends the checkouts of holds that are about to end: each order still awaiting payment fails
+ * with `reason`, and its intent is marked failed (refunded, had its money already arrived).
+ * The orders and intents are locked first, so a confirm or webhook for them waits and then
+ * sees the result. A hold whose payment is in flight keeps its order: with `whilePaying:
+ * 'refuse'` that throws CHECKOUT_IN_PROGRESS before anything changes; with 'skip' the hold is
+ * returned, for the caller to leave alone too.
+ */
+export async function closeCheckouts(
+  c: Queryable,
+  holdIds: string[],
+  reason: CheckoutEnd,
+  whilePaying: 'refuse' | 'skip',
+): Promise<Set<string>> {
+  const paying = new Set<string>();
+  if (holdIds.length === 0) return paying;
+  const { rows } = await c.query<{ id: string; holdId: string; paying: boolean }>(
+    `SELECT o.id, o.hold_id AS "holdId", ${PAYMENT_IN_FLIGHT_SQL('pi')} AS paying
+       FROM orders o JOIN payment_intents pi ON pi.order_id = o.id
+      WHERE o.hold_id = ANY($1) AND o.status = 'pending_payment'
+        FOR UPDATE OF o, pi`,
     [holdIds],
   );
-  if (rowCount) throw checkoutInProgress();
+  for (const row of rows) if (row.paying) paying.add(row.holdId);
+  if (paying.size > 0 && whilePaying === 'refuse') throw checkoutInProgress();
+
+  const unpaid = rows.filter((r) => !r.paying).map((r) => r.id);
+  if (unpaid.length > 0) {
+    await c.query(`UPDATE orders SET status = 'failed', failure_reason = $2 WHERE id = ANY($1)`, [unpaid, reason]);
+    await c.query(
+      `UPDATE payment_intents
+          SET status = CASE WHEN status = 'succeeded' THEN 'refunded' ELSE 'failed' END, updated_at = now()
+        WHERE order_id = ANY($1)`,
+      [unpaid],
+    );
+  }
+  return paying;
 }
 
 /**
@@ -107,7 +155,9 @@ export async function assertNotInCheckout(c: Queryable, holdIds: string[]): Prom
  */
 export async function peekPreviousHold(db: Queryable, userId: string, eventId: string): Promise<string | null> {
   const { rows } = await db.query<{ id: string; paying: boolean }>(
-    `SELECT h.id, EXISTS (SELECT 1 FROM orders o WHERE o.hold_id = h.id AND o.status = 'pending_payment') AS paying
+    `SELECT h.id,
+            EXISTS (SELECT 1 FROM orders o JOIN payment_intents pi ON pi.order_id = o.id
+                     WHERE o.hold_id = h.id AND o.status = 'pending_payment' AND ${PAYMENT_IN_FLIGHT_SQL('pi')}) AS paying
        FROM holds h
       WHERE h.user_id = $1 AND h.event_id = $2 AND h.status = 'active' AND h.expires_at > now()
       ORDER BY h.created_at DESC
@@ -130,7 +180,8 @@ export async function lockBuyer(c: Queryable, userId: string, eventId: string): 
 /**
  * Ends the user's unexpired active hold on the event, so one buyer holds at most one batch
  * of seats per event. Called first inside each strategy's transaction (after lockBuyer), so a
- * failed new hold rolls this back too. Throws CHECKOUT_IN_PROGRESS if that hold is being paid for.
+ * failed new hold rolls this back too. An unpaid order of that hold fails with REPLACED; while
+ * a payment for it is in flight, this throws CHECKOUT_IN_PROGRESS instead and the hold stays.
  */
 export async function releasePreviousHold(c: Queryable, userId: string, eventId: string): Promise<FreedSeat[]> {
   const { rows } = await c.query<{ id: string }>(
@@ -141,8 +192,8 @@ export async function releasePreviousHold(c: Queryable, userId: string, eventId:
   );
   if (rows.length === 0) return [];
   const ids = rows.map((r) => r.id);
-  // A separate statement, after the lock: it sees an order committed while we waited for the lock.
-  await assertNotInCheckout(c, ids);
+  // Separate statements, after the lock: they see an order or payment committed while we waited.
+  await closeCheckouts(c, ids, 'REPLACED', 'refuse');
   return endHolds(c, ids, 'released');
 }
 

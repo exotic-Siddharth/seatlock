@@ -155,3 +155,72 @@ describe('POST /api/mockpay/intents/:id/confirm', () => {
     expect(values.join('\n')).not.toContain(TEST_CARDS.success);
   });
 });
+
+/*
+ * A buyer can press Pay in one tab and Release in another. Whichever transaction gets the
+ * checkout first decides, and the other sees its result: never a payment for released seats.
+ * A third client holds the intent's row lock so the two requests queue in a known order.
+ */
+describe('a release racing a confirm for the same checkout', () => {
+  const lockWaiters = async () => {
+    const { rows } = await ctx.deps.db.query<{ n: number }>(
+      `SELECT count(*) AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`,
+    );
+    return rows[0]!.n;
+  };
+
+  async function withIntentLocked(intentId: string, run: () => Promise<void>) {
+    const blocker = await ctx.deps.db.connect();
+    try {
+      await blocker.query('BEGIN');
+      await blocker.query('SELECT 1 FROM payment_intents WHERE id = $1 FOR UPDATE', [intentId]);
+      await run();
+      await blocker.query('COMMIT');
+    } finally {
+      blocker.release();
+    }
+  }
+
+  it('a release that got there first fails the order, and the confirm queued behind it is refused', async () => {
+    const buyer = await createUser(ctx, { name: 'Racer' });
+    const { eventId, seatIds } = await createOnSaleEvent(ctx);
+    const { holdId, orderId, intentId } = await holdAndOrder(ctx, buyer.bearer, eventId, seatIds.slice(0, 2));
+    let releasing: Promise<request.Response> | undefined;
+    let paying: Promise<request.Response> | undefined;
+
+    await withIntentLocked(intentId, async () => {
+      releasing = request(ctx.app).delete(`/api/holds/${holdId}`).set(buyer.bearer).then((r) => r);
+      await waitFor(async () => (await lockWaiters()) === 1);
+      paying = confirm(buyer.bearer, intentId).then((r) => r);
+      await waitFor(async () => (await lockWaiters()) === 2);
+    });
+
+    expect((await releasing!).status).toBe(204);
+    const refused = await paying!;
+    expect(refused.status).toBe(409);
+    expect(refused.body.error.code).toBe('HOLD_NOT_ACTIVE');
+    expect(await orderOf(buyer.bearer, orderId)).toMatchObject({ status: 'failed', failureReason: 'RELEASED' });
+    expect(await intentRow(intentId)).toMatchObject({ status: 'failed', attempts: 0 });
+  });
+
+  it('a confirm that got there first keeps the seats, and the release queued behind it is refused', async () => {
+    const buyer = await createUser(ctx, { name: 'Racer' });
+    const { eventId, seatIds } = await createOnSaleEvent(ctx);
+    const { holdId, orderId, intentId } = await holdAndOrder(ctx, buyer.bearer, eventId, seatIds.slice(0, 2));
+    let releasing: Promise<request.Response> | undefined;
+    let paying: Promise<request.Response> | undefined;
+
+    await withIntentLocked(intentId, async () => {
+      paying = confirm(buyer.bearer, intentId).then((r) => r);
+      await waitFor(async () => (await lockWaiters()) === 1);
+      releasing = request(ctx.app).delete(`/api/holds/${holdId}`).set(buyer.bearer).then((r) => r);
+      await waitFor(async () => (await lockWaiters()) === 2);
+    });
+
+    expect((await paying!).status).toBe(202);
+    const refused = await releasing!;
+    expect(refused.status).toBe(409);
+    expect(refused.body.error.code).toBe('CHECKOUT_IN_PROGRESS');
+    await waitFor(async () => (await orderOf(buyer.bearer, orderId)).status === 'paid', 2_000);
+  });
+});

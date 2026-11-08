@@ -53,6 +53,8 @@ export async function confirmPayment(
 ): Promise<{ status: 'processing' }> {
   await withTx(deps.db, async (c) => {
     // The intent's row lock makes concurrent confirms (even with different keys) take turns.
+    // The order is locked too (order before intent, like every other checkout path), so a
+    // confirm that waited for a release of the same checkout reads the order as it now is.
     const { rows } = await c.query<IntentState>(
       `SELECT o.user_id AS "userId", o.status AS "orderStatus", h.expires_at <= now() AS "holdLapsed",
               (pi.status = 'processing' AND pi.updated_at > now() - make_interval(secs => $2)) AS "inFlight"
@@ -60,7 +62,7 @@ export async function confirmPayment(
          JOIN orders o ON o.id = pi.order_id
          JOIN holds h ON h.id = o.hold_id
         WHERE pi.id = $1
-          FOR UPDATE OF pi`,
+          FOR UPDATE OF o, pi`,
       [req.intentId, STUCK_PROCESSING_SEC],
     );
     const intent = rows[0];

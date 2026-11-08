@@ -6,7 +6,7 @@ import { claimIfAvailable } from '../../src/booking/strategies/conditional';
 import { seatKey } from '../../src/booking/strategies/redis';
 import type { HoldRow } from '../../src/booking/strategies/types';
 import { createOnSaleEvent, makeCtx, resetState, type TestCtx } from '../helpers';
-import { holdStatus, insertUsers, seatRows } from './fixtures';
+import { holdStatus, insertUsers, orderState, seatRows } from './fixtures';
 
 let ctx: TestCtx;
 
@@ -112,24 +112,61 @@ describe.each(['naive', 'pessimistic', 'conditional', 'redis'] as const)('%s str
     expect((await seatRows(ctx, [a, b, c])).map((s) => s.hold_id)).toEqual([second.hold.id, second.hold.id, second.hold.id]);
   });
 
-  it('answers CHECKOUT_IN_PROGRESS before any seat conflict while the previous hold is being paid for', async () => {
+  it('answers CHECKOUT_IN_PROGRESS before any seat conflict while a payment for the previous hold is processing', async () => {
     const [a, b] = seats as [number, number];
     const first = await hold(alice, [a]);
     if (!first.ok) throw new Error('first hold failed');
-    await placeOrder(first.hold);
+    const orderId = await placeOrder(first.hold, 'processing');
     await hold(bob, [b]);
 
     await expect(hold(alice, [b])).rejects.toMatchObject({ code: 'CHECKOUT_IN_PROGRESS' });
     expect(await holdStatus(ctx, first.hold.id)).toBe('active');
+    expect(await orderState(ctx, orderId)).toMatchObject({ status: 'pending_payment', intent: 'processing' });
+  });
+
+  it('replaces a previous hold whose order has no payment in flight, failing that order with REPLACED', async () => {
+    const [a, b] = seats as [number, number];
+    const first = await hold(alice, [a]);
+    if (!first.ok) throw new Error('first hold failed');
+    const orderId = await placeOrder(first.hold, 'failed');
+
+    const second = await hold(alice, [b]);
+
+    expect(second.ok).toBe(true);
+    expect(await holdStatus(ctx, first.hold.id)).toBe('released');
+    expect(await orderState(ctx, orderId)).toEqual({ status: 'failed', failureReason: 'REPLACED', intent: 'failed' });
+  });
+
+  // naive has no transaction: it releases the previous hold before it looks at the seats.
+  it.skipIf(name === 'naive')('leaves the previous hold and its order as they were when the new hold is refused', async () => {
+    const [a, b] = seats as [number, number];
+    const first = await hold(alice, [a]);
+    if (!first.ok) throw new Error('first hold failed');
+    const orderId = await placeOrder(first.hold, 'failed');
+    await hold(bob, [b]);
+
+    expect(await hold(alice, [b])).toEqual({ ok: false, takenSeatIds: [b] });
+    expect(await holdStatus(ctx, first.hold.id)).toBe('active');
+    expect(await orderState(ctx, orderId)).toMatchObject({ status: 'pending_payment', intent: 'failed' });
   });
 });
 
-/** A pending order for the hold, as POST /api/orders would leave it. */
-async function placeOrder(hold: HoldRow): Promise<void> {
-  await ctx.deps.db.query(
-    `INSERT INTO orders (user_id, event_id, hold_id, amount_paise, idempotency_key) VALUES ($1, $2, $3, $4, $5)`,
+/**
+ * A pending order for the hold and its payment intent, as POST /api/orders leaves them, with
+ * the intent in `intent`: 'processing' is a payment in flight, 'failed' a declined card.
+ */
+async function placeOrder(hold: HoldRow, intent: 'processing' | 'failed'): Promise<string> {
+  const { rows } = await ctx.deps.db.query<{ id: string }>(
+    `INSERT INTO orders (user_id, event_id, hold_id, amount_paise, idempotency_key) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
     [hold.userId, hold.eventId, hold.id, hold.amountPaise, `key-${hold.id}`],
   );
+  const orderId = rows[0]!.id;
+  await ctx.deps.db.query(
+    `INSERT INTO payment_intents (id, order_id, amount_paise, status, attempts, failure_code)
+     VALUES ($1, $2, $3, $4, 1, $5)`,
+    [`pi_${orderId.replace(/-/g, '')}`, orderId, hold.amountPaise, intent, intent === 'failed' ? 'card_declined' : null],
+  );
+  return orderId;
 }
 
 describe('hold timestamps', () => {

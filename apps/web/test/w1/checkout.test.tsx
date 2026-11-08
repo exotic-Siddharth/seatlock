@@ -2,7 +2,7 @@ import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Route, Routes, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cardErrors, formatCardNumber, formatExpiry } from '../../src/features/checkout/card';
+import { cardErrors, failureMessage, failureTitle, formatCardNumber, formatExpiry } from '../../src/features/checkout/card';
 import Checkout from '../../src/pages/Checkout';
 import { renderWithProviders } from '../render';
 import { FAN, HOLD_ID, ORDER_ID, iso, makeHold, makeOrder } from './fixtures';
@@ -182,6 +182,93 @@ describe('Checkout', () => {
     expect(http.callsTo(`DELETE /api/holds/${HOLD_ID}`)).toHaveLength(1);
   });
 
+  it('lets the user release the seats after a declined card', async () => {
+    const http = mockApi({
+      [`GET /api/holds/${HOLD_ID}`]: [200, { hold: makeHold() }],
+      [ORDERS]: [201, created],
+      [CONFIRM]: [202, { status: 'processing' }],
+      [`GET /api/orders/${ORDER_ID}`]: [200, { order: makeOrder({ lastPaymentError: 'card_declined' }) }],
+      [`DELETE /api/holds/${HOLD_ID}`]: [204],
+    });
+    const user = renderCheckout();
+
+    await user.click(await screen.findByRole('button', { name: /4000 0000 0000 0002/ }));
+    await user.click(screen.getByRole('button', { name: 'Pay ₹4,998' }));
+    await nextPoll();
+    expect(await screen.findByText('Your card was declined.')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Release seats' }));
+    await user.click(screen.getByRole('button', { name: 'Release' }));
+    await waitFor(() => expect(location()).toBe('/events/monsoon-static'));
+    expect(http.callsTo(`DELETE /api/holds/${HOLD_ID}`)).toHaveLength(1);
+  });
+
+  it('disables Release only while a payment is processing, and says why', async () => {
+    let outcome = makeOrder();
+    mockApi({
+      [`GET /api/holds/${HOLD_ID}`]: [200, { hold: makeHold() }],
+      [ORDERS]: [201, created],
+      [CONFIRM]: [202, { status: 'processing' }],
+      [`GET /api/orders/${ORDER_ID}`]: () => [200, { order: outcome }],
+    });
+    const user = renderCheckout();
+    const release = await screen.findByRole('button', { name: 'Release seats' });
+    expect((release as HTMLButtonElement).disabled).toBe(false);
+
+    await user.click(screen.getByRole('button', { name: /4000 0000 0000 0002/ }));
+    await user.click(screen.getByRole('button', { name: 'Pay ₹4,998' }));
+    await nextPoll();
+    expect((screen.getByRole('button', { name: 'Release seats' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/once this payment finishes/)).toBeTruthy();
+
+    outcome = makeOrder({ lastPaymentError: 'card_declined' });
+    await nextPoll();
+    expect(await screen.findByText('Your card was declined.')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Release seats' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('explains a refusal to release while a payment is still processing', async () => {
+    mockApi({
+      [`GET /api/holds/${HOLD_ID}`]: [200, { hold: makeHold() }],
+      [`DELETE /api/holds/${HOLD_ID}`]: [
+        409,
+        { error: { code: 'CHECKOUT_IN_PROGRESS', message: 'A payment for your seats on this event is still processing; wait a moment for it to finish' } },
+      ],
+    });
+    const user = renderCheckout();
+    await user.click(await screen.findByRole('button', { name: 'Release seats' }));
+    await user.click(screen.getByRole('button', { name: 'Release' }));
+    expect(await screen.findByText('Could not release the seats')).toBeTruthy();
+    expect(screen.getByText(/still processing/)).toBeTruthy();
+    expect(location()).toBe(`/checkout/${HOLD_ID}`);
+  });
+
+  it.each([
+    ['released', 'RELEASED', 'You released these seats', /not charged/],
+    ['released', 'REPLACED', 'You picked other seats', /not charged/],
+    ['expired', 'HOLD_EXPIRED', 'Your hold expired', /not charged/],
+    ['expired', 'HOLD_LOST', 'Payment failed', /refunded/],
+    ['released', 'SEAT_ALREADY_SOLD', 'Payment failed', /refunded/],
+  ] as const)('coming back to a %s checkout whose order failed with %s explains it', async (status, reason, title, body) => {
+    mockApi({
+      [`GET /api/holds/${HOLD_ID}`]: [200, { hold: makeHold({ status, orderId: ORDER_ID }) }],
+      [`GET /api/orders/${ORDER_ID}`]: [200, { order: makeOrder({ status: 'failed', failureReason: reason }) }],
+    });
+    renderCheckout();
+    expect(await screen.findByRole('heading', { name: title })).toBeTruthy();
+    expect(screen.getByText(body)).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Back to the seat map' }).getAttribute('href')).toBe('/events/monsoon-static');
+  });
+
+  it('sends a checkout whose late payment went through to its order', async () => {
+    mockApi({
+      [`GET /api/holds/${HOLD_ID}`]: [200, { hold: makeHold({ status: 'expired', orderId: ORDER_ID }) }],
+      [`GET /api/orders/${ORDER_ID}`]: [200, { order: makeOrder({ status: 'paid' }) }],
+    });
+    renderCheckout();
+    await waitFor(() => expect(location()).toBe(`/orders/${ORDER_ID}`));
+  });
+
   it('sends a converted hold to its order', async () => {
     mockApi({ [`GET /api/holds/${HOLD_ID}`]: [200, { hold: makeHold({ status: 'converted', orderId: ORDER_ID }) }] });
     renderCheckout();
@@ -203,6 +290,18 @@ describe('card helpers', () => {
     expect(formatExpiry('1')).toBe('1');
     expect(formatExpiry('123')).toBe('12/3');
     expect(formatExpiry('12/34')).toBe('12/34');
+  });
+
+  it('says what happened to an order that ended before anyone paid, and that nothing was charged', () => {
+    expect(failureTitle('RELEASED')).toBe('You released these seats');
+    expect(failureTitle('REPLACED')).toBe('You picked other seats');
+    expect(failureTitle('HOLD_EXPIRED')).toBe('Your hold expired');
+    expect(failureTitle('HOLD_LOST')).toBe('Payment failed');
+    for (const reason of ['RELEASED', 'REPLACED', 'HOLD_EXPIRED']) {
+      expect(failureMessage(reason)).toMatch(/went back on sale/);
+      expect(failureMessage(reason)).toMatch(/not charged/);
+      expect(failureMessage(reason)).not.toMatch(reason);
+    }
   });
 
   it('validates with Luhn and the MockPay schema', () => {

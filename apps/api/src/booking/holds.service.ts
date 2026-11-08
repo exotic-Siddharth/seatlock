@@ -3,7 +3,7 @@ import type { AppDeps } from '../context';
 import { withTx, type Queryable } from '../db';
 import { AppError } from '../errors';
 import { verifyQueueToken } from '../queue/token';
-import { assertNotInCheckout, endHolds } from './seats';
+import { closeCheckouts, endHolds } from './seats';
 import { loadSeats, readHold, toHold } from './serialize';
 import { getStrategy } from './strategies';
 import { clearSeatGates, releaseSeatGates } from './strategies/redis';
@@ -132,7 +132,11 @@ export async function getHold(db: Queryable, holdId: string, userId: string): Pr
   return found.hold;
 }
 
-/** DELETE /api/holds/:id: gives the seats back, unless they are paid for or being paid for. */
+/**
+ * DELETE /api/holds/:id: gives the seats back, unless they are paid for or a payment for them
+ * is in flight (CHECKOUT_IN_PROGRESS). An unpaid order of the hold, say after a declined card,
+ * fails with RELEASED.
+ */
 export async function releaseHold(deps: AppDeps, holdId: string, userId: string): Promise<void> {
   const { eventId, freed } = await withTx(deps.db, async (c) => {
     const { rows } = await c.query<{ eventId: string; status: HoldStatus }>(
@@ -143,7 +147,7 @@ export async function releaseHold(deps: AppDeps, holdId: string, userId: string)
     if (!hold) throw new AppError('NOT_FOUND', 'Hold not found');
     if (hold.status === 'converted') throw new AppError('HOLD_NOT_ACTIVE', 'These seats are already paid for');
     if (hold.status !== 'active') return { eventId: hold.eventId, freed: [] }; // already over: nothing to do
-    await assertNotInCheckout(c, [holdId]);
+    await closeCheckouts(c, [holdId], 'RELEASED', 'refuse');
     return { eventId: hold.eventId, freed: await endHolds(c, [holdId], 'released') };
   });
   await afterSeatsChanged(deps, eventId, freedChanges(freed), freed);

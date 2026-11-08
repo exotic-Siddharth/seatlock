@@ -2,6 +2,7 @@ import type { Order, OrderStatus, Ticket } from '@seatlock/shared';
 import { Suspense, lazy } from 'react';
 import { Badge, Skeleton, type BadgeTone } from '../../components/ui';
 import { formatDate, formatInr, formatTime } from '../../lib/format';
+import { endedUnpaid } from '../checkout/card';
 
 // The QR encoder loads with the first ticket shown, not with the page.
 const TicketQr = lazy(() => import('./TicketQr').then((m) => ({ default: m.TicketQr })));
@@ -12,8 +13,10 @@ const ORDER_STATUS: Record<OrderStatus, { tone: BadgeTone; label: string }> = {
   failed: { tone: 'danger', label: 'Payment failed' },
 };
 
-export function OrderStatusBadge({ status }: { status: OrderStatus }) {
-  const { tone, label } = ORDER_STATUS[status];
+/** An order's status. One that ended before anyone paid (released, replaced, expired) is "Cancelled". */
+export function OrderStatusBadge({ order }: { order: Pick<Order, 'status' | 'failureReason'> }) {
+  const { tone, label } =
+    order.status === 'failed' && endedUnpaid(order.failureReason) ? { tone: 'neutral' as const, label: 'Cancelled' } : ORDER_STATUS[order.status];
   return <Badge tone={tone}>{label}</Badge>;
 }
 

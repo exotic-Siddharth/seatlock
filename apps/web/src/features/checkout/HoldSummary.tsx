@@ -13,6 +13,7 @@ export function HoldSummary({
   clock,
   urgent,
   canRelease,
+  releaseHint,
   onRelease,
 }: {
   hold: Hold;
@@ -20,6 +21,8 @@ export function HoldSummary({
   /** Under a minute left. */
   urgent: boolean;
   canRelease: boolean;
+  /** Why Release is unavailable right now, if it is. */
+  releaseHint?: string;
   onRelease(): void;
 }) {
   return (
@@ -54,9 +57,12 @@ export function HoldSummary({
           <span className="font-medium text-ink">Total</span>
           <span className="font-display text-2xl font-bold text-ink tabular-nums">{formatInr(hold.amountPaise)}</span>
         </div>
-        <Button variant="ghost" size="sm" disabled={!canRelease} onClick={onRelease} className="self-start text-muted">
-          Release seats
-        </Button>
+        <div className="flex flex-col items-start gap-1">
+          <Button variant="ghost" size="sm" disabled={!canRelease} onClick={onRelease} className="text-muted">
+            Release seats
+          </Button>
+          {releaseHint && <p className="text-xs text-muted">{releaseHint}</p>}
+        </div>
       </div>
     </Card>
   );

@@ -206,7 +206,12 @@ function SeatPicker({ event, clock, access }: { event: EventDetail; clock: Serve
       toast.push({ tone: 'warning', title: 'Your access window has ended', body: 'Rejoin the line to pick seats.' });
     } else if (code === 'CHECKOUT_IN_PROGRESS') {
       refreshSeats();
-      toast.push({ tone: 'warning', title: 'You are already paying for seats here', body: 'Finish or release that checkout first.' });
+      // Only answered while a payment for the buyer's earlier seats is in flight (under a minute).
+      toast.push({
+        tone: 'warning',
+        title: 'A payment for your seats is still processing',
+        body: 'Wait a moment for it to finish, then try again.',
+      });
     } else if (code === 'SALE_NOT_OPEN' || code === 'SALE_CLOSED') {
       void queryClient.invalidateQueries({ queryKey: eventKeys.detail(event.slug) });
       toast.push({ tone: 'info', title: errorMessage(error) });
@@ -280,7 +285,7 @@ function SeatPicker({ event, clock, access }: { event: EventDetail; clock: Serve
             }
           >
             <Countdown target={myHold.expiresAt} clock={clock} label="Time left on your hold" onDone={refreshSeats} className="font-semibold text-ink" />{' '}
-            left to pay. Holding new seats releases these.
+            left to pay. Holding other seats gives these back, unless a payment for them is processing.
           </Notice>
         )}
         {snapshot.isRefetchError && (

@@ -2,7 +2,7 @@ import type { AppDeps } from '../context';
 import { withTx } from '../db';
 import { runAsLeader } from '../infra/leader';
 import { afterSeatsChanged, freedChanges } from './holds.service';
-import { endHolds } from './seats';
+import { closeCheckouts, endHolds, PAYMENT_IN_FLIGHT_SQL } from './seats';
 import type { FreedSeat } from './strategies/types';
 
 const SWEEP_EVERY_MS = 5_000;
@@ -15,9 +15,10 @@ export function startSweeper(deps: AppDeps): () => void {
 }
 
 /**
- * Tidies lapsed holds (spec §7.3): marks them expired and frees their seats. Correctness never
- * waits for this, since every reader already treats a lapsed hold's seats as available; it
- * keeps the tables honest and pushes the freed seats to open seat maps. Returns the seats freed.
+ * Tidies lapsed holds (spec §7.3): marks them expired, frees their seats and fails their
+ * unpaid orders with HOLD_EXPIRED. Correctness never waits for this, since every reader
+ * already treats a lapsed hold's seats as available; it keeps the tables honest, ends the
+ * checkouts nobody paid for and pushes the freed seats to open seat maps. Returns the seats freed.
  */
 export async function sweepOnce(deps: AppDeps): Promise<number> {
   const freed = await withTx(deps.db, async (c) => {
@@ -29,13 +30,15 @@ export async function sweepOnce(deps: AppDeps): Promise<number> {
       `SELECT h.id FROM holds h
         WHERE h.status = 'active' AND h.expires_at <= now()
           AND NOT EXISTS (SELECT 1 FROM orders o JOIN payment_intents pi ON pi.order_id = o.id
-                           WHERE o.hold_id = h.id AND o.status = 'pending_payment'
-                             AND pi.status = 'processing' AND pi.updated_at > now() - interval '60 seconds')
+                           WHERE o.hold_id = h.id AND o.status = 'pending_payment' AND ${PAYMENT_IN_FLIGHT_SQL('pi')})
           FOR UPDATE SKIP LOCKED`,
     );
+    const lapsed = rows.map((r) => r.id);
+    // A payment that started after the SELECT above keeps its hold until the next sweep.
+    const paying = await closeCheckouts(c, lapsed, 'HOLD_EXPIRED', 'skip');
     return endHolds(
       c,
-      rows.map((r) => r.id),
+      lapsed.filter((id) => !paying.has(id)),
       'expired',
     );
   });
