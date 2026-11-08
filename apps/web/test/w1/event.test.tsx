@@ -221,6 +221,28 @@ describe('Event page: waiting room', () => {
     expect(screen.getByRole('timer', { name: 'Time until the sale opens' })).toBeTruthy();
   });
 
+  it('before the sale opens, says the place is drawn at the opening instead of showing a provisional one', async () => {
+    mockApi({
+      'GET /api/events/monsoon-static': [200, { event: queueEvent() }],
+      // The API already reports a place (queue.js reads it), but it is only a random score until the draw.
+      [`GET ${QUEUE_ROUTE}`]: [
+        200,
+        { queue: makeQueue({ state: 'waiting', position: 17, aheadCount: 16, queueLength: 40, estimatedWaitSec: 4, saleOpensAt: iso(Date.now() + 540_000) }) },
+      ],
+    });
+    renderEvent();
+
+    expect(await screen.findByRole('heading', { name: "You're in line" })).toBeTruthy();
+    expect(screen.getByText('Your place is drawn when the sale opens.')).toBeTruthy();
+    expect(screen.queryByText('17')).toBeNull();
+    expect(screen.queryByText(/people ahead of you/)).toBeNull();
+    expect(screen.queryByText(/Less than a minute to go/)).toBeNull();
+    expect(screen.getByText(/Admission starts when the sale opens/)).toBeTruthy();
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    expect(screen.getByText(/Refreshing is safe: you stay in the draw/)).toBeTruthy();
+    expect(screen.getByText('40 in line')).toBeTruthy();
+  });
+
   it('opens the map once admitted and sends the queue token with the hold', async () => {
     const user = userEvent.setup();
     const http = mockApi({
