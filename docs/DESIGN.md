@@ -86,7 +86,7 @@ TypeScript (strict, ESM) everywhere. Node 22, npm workspaces.
 - **API:** Express 5, `pg` 8, `ioredis` 5, `zod` 3, `@node-rs/argon2`, `cookie-parser`, `helmet`, `pino` + `pino-http`, `prom-client`. Dev runs on `tsx` and production builds with `tsup` (bundling `@seatlock/shared`).
 - **Web:** React 19, Vite 6, Tailwind CSS 4 (`@tailwindcss/vite`), React Router 7 (library mode), TanStack Query 5, `qrcode`, `lucide-react`, and self-hosted fonts via `@fontsource-variable/*`. Charts are small hand-written SVG components with no chart library.
 - **Tests:** Vitest, Supertest, Playwright (one e2e journey).
-- **Infra:** Docker Compose (`postgres:16-alpine`, `redis:7-alpine`, API image, `nginx:alpine`, `grafana/k6`), with GitHub Actions for CI.
+- **Infra:** Docker Compose (`postgres:16-alpine`, `redis:7-alpine`, API image on `node:22.23.4-alpine`, `nginx:1.31.8-alpine`, `grafana/k6:2.3.0`; the last three pinned for reproducible benchmarks), with GitHub Actions for CI.
 - **Migrations:** plain SQL files in `apps/api/migrations/NNN_name.sql`, applied in order by `src/scripts/migrate.ts` and tracked in `schema_migrations`.
 
 **Why `pg` instead of Prisma (unlike the author's other two projects):** the whole point here is the exact SQL on the hot path, including the locking clauses, conditional `UPDATE … RETURNING`, CTEs and error codes. An ORM would hide it.
@@ -433,7 +433,7 @@ k6 runs in the `grafana/k6` container on the Compose network against nginx, with
 **Invariant check** (`npm run bench:verify -w @seatlock/api -- --event <slug>`) prints JSON:
 `oversoldSeats` (seats with more than 1 ticket), `soldSeatsWithoutTicket`, `ticketsOnUnsoldSeats`, `paidOrdersWithoutTickets`, `ticketsWithoutPaidOrder`, `paidAmountMismatch`, `doublePromisedSeats` (seats in 2+ holds whose `[created_at, coalesce(ended_at, expires_at))` intervals overlap), `refundedOrders` (orders that failed with `HOLD_LOST` or `SEAT_ALREADY_SOLD`), and `pass` (every count is 0 apart from `refundedOrders`; for `naive`, `doublePromisedSeats` is reported but excluded from `pass`).
 
-**Runner.** `bash loadtest/run-bench.sh [--quick]` brings the stack up with `BENCH_MODE=1` and seeds it. For each strategy in `naive pessimistic conditional redis` and each scenario `hot-seat flash-sale`, it resets the event, runs k6 (`--summary-export`), runs verify and saves `loadtest/results/<scenario>-<strategy>.json`. It then runs `queue.js` once and finally writes `loadtest/results/summary.json` and `loadtest/results/SUMMARY.md`.
+**Runner.** `bash loadtest/run-bench.sh [--quick] [--keep]` brings the stack up with `BENCH_MODE=1` (and `LOG_LEVEL=warn`) and seeds it. For each strategy in `naive pessimistic conditional redis` and each scenario `hot-seat flash-sale`, it resets the event, runs k6 (`--summary-export`), runs verify and saves `loadtest/results/<scenario>-<strategy>.json`. It then runs `queue.js` once and finally writes `loadtest/results/summary.json` and `loadtest/results/SUMMARY.md`. The raw k6 `--summary-export` files and verify outputs are committed in `loadtest/results/raw/`; on exit the stack goes down (`--keep` leaves it up with `BENCH_MODE=0`).
 
 `summary.json`:
 ```json
@@ -465,7 +465,8 @@ k6 runs in the `grafana/k6` container on the Compose network against nginx, with
 ```
 seatlock/
   package.json · tsconfig.base.json · .gitattributes (LF) · .gitignore · .editorconfig · .env.example
-  docker-compose.yml        # postgres, redis (default); api×2 + nginx (profile "stack"); k6 (profile "bench")
+  docker-compose.yml        # postgres, redis for development (loopback ports)
+  docker-compose.stack.yml  # project "seatlock-stack": api×2 + nginx + one-shot seed (profile "stack"); seeder, k6 (profile "bench")
   infra/nginx.conf          # static web + /api upstream (SSE: proxy_buffering off)
   apps/api/  {package.json, tsconfig.json, vitest.config.ts, Dockerfile, migrations/, src/, test/}
   apps/web/  {package.json, vite.config.ts, index.html, src/, e2e/, playwright.config.ts}
@@ -475,7 +476,7 @@ seatlock/
 ```
 
 ## 14. README must contain
-The pitch, a GIF/screenshot placeholder replaced by real screenshots taken during QA, quick start (`docker compose --profile stack up` → http://localhost:8088, demo login), the architecture diagram, **"How it never double-sells"** (the four strategies plus defence in depth), the benchmark table generated from `summary.json` with the machine details, security notes, testing commands, the project structure, and 3 suggested resume bullets with real numbers.
+The pitch, a GIF/screenshot placeholder replaced by real screenshots taken during QA, quick start (`docker compose -f docker-compose.yml -f docker-compose.stack.yml --profile stack up -d --build` → http://localhost:8088, demo login; see the Decisions log), the architecture diagram, **"How it never double-sells"** (the four strategies plus defence in depth), the benchmark table generated from `summary.json` with the machine details, security notes, testing commands, the project structure, and 3 suggested resume bullets with real numbers.
 
 ---
 
@@ -503,3 +504,6 @@ The pitch, a GIF/screenshot placeholder replaced by real screenshots taken durin
 - 2026-11-07 (L1 ruling): the verifier's `doublePromisedSeats` uses the interval `[created_at, LEAST(COALESCE(ended_at, expires_at), expires_at))`, not §11's `coalesce(ended_at, expires_at)`. A hold promises nothing after it lapses, and seats are taken over lazily between `expires_at` and the next sweep, so the spec's formula would count a legal takeover as a double promise. The intervals are half-open.
 - 2026-11-07 (W1): the seat map's live counts (available / held / sold) are counted from the same snapshot the map draws, kept current by the SSE `seats` changes, instead of from the SSE `stats` event, so the numbers always match the seats on screen.
 - 2026-11-08 (fix wave, final review Minor 2): `SESSION_SECRET_PEPPER` is gone from the config, `.env.example`, the stack compose file and §9. Nothing used it, and a reader would assume sessions were peppered. None is needed: the Redis key is the SHA-256 of a 256-bit random token, which cannot be brute-forced from a leaked key, unlike a password hash.
+- 2026-11-08 (fix wave, final review Important 2): the full stack stays in its own file and Compose project, `docker-compose.stack.yml` as `seatlock-stack`, used with `-f docker-compose.yml -f docker-compose.stack.yml`, instead of profiles in one `docker-compose.yml` (§13, §14; the pre-flight ruling said to merge them). It is a deliberate deviation: the stack gets its own Postgres, Redis and volume, so benchmark data and 5,000 bench sessions never land in the development database, and bringing it up never touches the dev containers. The quick start is therefore `docker compose -f docker-compose.yml -f docker-compose.stack.yml --profile stack up -d --build`. A one-shot `seed` service in the `stack` profile runs `node dist/scripts/seed.js` once the API is healthy (with a clearly marked DEV ONLY `SEED_ADMIN_PASSWORD`), and nginx starts only after it completed, so the first page load has the demo events.
+- 2026-11-08 (fix wave): the development Postgres and Redis publish their ports on loopback only (IPv4 and IPv6). With the dev password and no Redis password, a LAN-wide binding let anyone on the network write `sl:sess:*` and forge an admin session. nginx sends a Content-Security-Policy (`'self'` only, `frame-ancestors 'none'`) and `X-Frame-Options: DENY` on the SPA's pages.
+- 2026-11-08 (fix wave, bench traceability): `run-bench.sh` runs the API with `LOG_LEVEL=warn` (per-request info logs cost the replicas CPU at 2,000 VUs) and the machine notes in `summary.json` say so; the small raw k6 exports and verify outputs are committed next to the results (large logs stay ignored); `grafana/k6`, `node` and `nginx` are pinned to exact versions; and the script brings the stack down however it ends (`--keep` instead switches it back to `BENCH_MODE=0`), so the stack is never left running with rate limits off and `naive` allowed.
