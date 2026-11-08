@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { createParser } from 'eventsource-parser';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { createApp } from '../../src/app';
 import { createOnSaleEvent, createUser, createVenue, makeCtx, resetState, type TestCtx } from '../helpers';
 import { insertHold, insertPaidOrder, insertUser } from './fixtures';
 
@@ -238,7 +239,8 @@ describe('GET /api/stats', () => {
     await insertPaidOrder(ctx, { eventId: bench.eventId, userId, seatIds: [bench.seatIds[0]!, bench.seatIds[1]!] });
     await insertHold(ctx, { eventId: bench.eventId, userId, seatIds: [bench.seatIds[2]!] });
 
-    const res = await request(ctx.app).get('/api/stats');
+    // A fresh app: /api/stats caches its answer for 2 s, and the test above may have just filled that cache.
+    const res = await request(createApp(ctx.deps)).get('/api/stats');
     expect(res.body).toEqual({ ticketsSold: 1, eventsOnSale: 1, activeHolds: 0 });
   });
 });
