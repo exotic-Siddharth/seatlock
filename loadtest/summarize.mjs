@@ -181,6 +181,13 @@ function sh(cmd, args) {
   return execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 }
 
+/** How much the API replicas logged: run-bench.sh runs them at warn, so per-request logs cost no CPU. */
+export function logLevelNote(level) {
+  if (!level) return '';
+  const quiet = ['warn', 'error', 'fatal', 'silent'].includes(level);
+  return `the API replicas ran with LOG_LEVEL=${level}${quiet ? ', so per-request logging was off' : ', logging every request'}`;
+}
+
 export function describeMachine() {
   const cpus = os.cpus();
   const [dockerCpus, dockerMemBytes] = sh('docker', ['info', '--format', '{{.NCPU}} {{.MemTotal}}']).split(' ').map(Number);
@@ -202,6 +209,7 @@ export function describeMachine() {
   }
   const notes = [
     'k6, nginx, the API replicas, Postgres and Redis all ran on this one machine (Docker Desktop, WSL2), so they competed for the same CPUs',
+    logLevelNote(process.env.LOG_LEVEL),
     commit && `commit ${commit}`,
     process.env.BENCH_NOTES,
   ].filter(Boolean).join('. ');
