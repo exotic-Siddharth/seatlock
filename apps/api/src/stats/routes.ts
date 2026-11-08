@@ -4,11 +4,13 @@ import type { AppDeps } from '../context';
 
 const CACHE_MS = 2_000;
 
+/** Listed events only: bench events are unlisted and live in the same stack database as the demo. */
 async function loadStats(deps: AppDeps): Promise<Stats> {
   const { rows } = await deps.db.query<Stats>(
-    `SELECT (SELECT count(*) FROM tickets) AS "ticketsSold",
+    `SELECT (SELECT count(*) FROM tickets t JOIN events e ON e.id = t.event_id WHERE e.listed) AS "ticketsSold",
             (SELECT count(*) FROM events WHERE listed AND sale_opens_at <= now() AND starts_at > now()) AS "eventsOnSale",
-            (SELECT count(*) FROM holds WHERE status = 'active' AND expires_at > now()) AS "activeHolds"`,
+            (SELECT count(*) FROM holds h JOIN events e ON e.id = h.event_id
+              WHERE e.listed AND h.status = 'active' AND h.expires_at > now()) AS "activeHolds"`,
   );
   return rows[0]!;
 }

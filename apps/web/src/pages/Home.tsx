@@ -55,7 +55,8 @@ function Stats() {
   const tiles = [
     { label: 'Tickets sold', value: stats.data?.ticketsSold },
     { label: 'Events on sale', value: stats.data?.eventsOnSale },
-    { label: 'Seats on hold right now', value: stats.data?.activeHolds },
+    // A count of holds (one per buyer per event, each of up to maxSeatsPerOrder seats), not of seats.
+    { label: 'Active holds right now', value: stats.data?.activeHolds },
   ];
   return (
     <dl className="grid grid-cols-3 divide-x divide-dashed divide-line overflow-hidden rounded-2xl border border-line bg-surface">

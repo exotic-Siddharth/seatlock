@@ -49,6 +49,10 @@ describe('Home', () => {
     renderWithProviders(<Home />);
 
     expect(await screen.findByText('12,345')).toBeTruthy();
+    // activeHolds counts holds (one per buyer per event), not seats.
+    expect(screen.getByText('17')).toBeTruthy();
+    expect(screen.getByText('Active holds right now')).toBeTruthy();
+    expect(screen.queryByText(/Seats on hold/)).toBeNull();
     const grid = await screen.findByRole('list', { name: 'Events' });
     expect(within(grid).getAllByRole('listitem')).toHaveLength(2);
     expect(within(grid).getByRole('link', { name: /Monsoon Static/ }).getAttribute('href')).toBe('/events/monsoon-static');
