@@ -33,6 +33,9 @@ export function pgCode(e: unknown): string | undefined {
 
 const RETRYABLE = new Set(['40P01', '40001']); // deadlock_detected, serialization_failure
 
+/** A deadlock or serialization failure: withTx runs the transaction again. */
+export const isRetryable = (e: unknown): boolean => RETRYABLE.has(pgCode(e) ?? '');
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -58,7 +61,7 @@ export async function withTx<T>(
       await client.query('ROLLBACK').catch(() => {
         broken = true;
       });
-      if (attempt >= retries || !RETRYABLE.has(pgCode(e) ?? '')) throw e;
+      if (attempt >= retries || !isRetryable(e)) throw e;
     } finally {
       // A client whose ROLLBACK failed is in an unknown state: destroy it instead of reusing it.
       client.release(broken);

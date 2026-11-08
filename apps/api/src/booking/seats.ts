@@ -182,16 +182,23 @@ export async function lockBuyer(c: Queryable, userId: string, eventId: string): 
  * of seats per event. Called first inside each strategy's transaction (after lockBuyer), so a
  * failed new hold rolls this back too. An unpaid order of that hold fails with REPLACED; while
  * a payment for it is in flight, this throws CHECKOUT_IN_PROGRESS instead and the hold stays.
+ * `onLocked` hears the ids of the active holds it found and locked, before anything can throw.
  */
-export async function releasePreviousHold(c: Queryable, userId: string, eventId: string): Promise<FreedSeat[]> {
+export async function releasePreviousHold(
+  c: Queryable,
+  userId: string,
+  eventId: string,
+  onLocked?: (holdIds: string[]) => void,
+): Promise<FreedSeat[]> {
   const { rows } = await c.query<{ id: string }>(
     `SELECT id FROM holds
       WHERE user_id = $1 AND event_id = $2 AND status = 'active' AND expires_at > now()
         FOR UPDATE`,
     [userId, eventId],
   );
-  if (rows.length === 0) return [];
   const ids = rows.map((r) => r.id);
+  onLocked?.(ids);
+  if (ids.length === 0) return [];
   // Separate statements, after the lock: they see an order or payment committed while we waited.
   await closeCheckouts(c, ids, 'REPLACED', 'refuse');
   return endHolds(c, ids, 'released');
