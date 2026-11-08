@@ -228,4 +228,17 @@ describe('GET /api/stats', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ticketsSold: 2, eventsOnSale: 1, activeHolds: 1 });
   });
+
+  it('leaves out unlisted (bench) events, which share the stack database with the demo', async () => {
+    const venue = await createVenue(ctx);
+    const listed = await createOnSaleEvent(ctx, { venueId: venue.venueId });
+    const bench = await createOnSaleEvent(ctx, { title: 'Bench Hot', venueId: venue.venueId, listed: false });
+    const userId = await insertUser(ctx);
+    await insertPaidOrder(ctx, { eventId: listed.eventId, userId, seatIds: [listed.seatIds[0]!] });
+    await insertPaidOrder(ctx, { eventId: bench.eventId, userId, seatIds: [bench.seatIds[0]!, bench.seatIds[1]!] });
+    await insertHold(ctx, { eventId: bench.eventId, userId, seatIds: [bench.seatIds[2]!] });
+
+    const res = await request(ctx.app).get('/api/stats');
+    expect(res.body).toEqual({ ticketsSold: 1, eventsOnSale: 1, activeHolds: 0 });
+  });
 });
