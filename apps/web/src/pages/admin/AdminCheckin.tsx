@@ -1,13 +1,22 @@
 import type { CheckinResult } from '@seatlock/shared';
 import { useMutation } from '@tanstack/react-query';
-import { CircleAlert, CircleCheck, CircleX } from 'lucide-react';
+import { CircleAlert, CircleCheck, CircleX, RotateCcw } from 'lucide-react';
 import { useRef, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import { Button, Card, Input, cx } from '../../components/ui';
 import { ApiError, api, errorMessage } from '../../lib/api';
 import { formatDateTime } from '../../lib/format';
 
-type Outcome = { kind: 'result'; result: CheckinResult } | { kind: 'error'; message: string };
+type Outcome =
+  | { kind: 'result'; result: CheckinResult }
+  /** The server looked and no ticket has this code (or it cannot be one): turn them away. */
+  | { kind: 'invalid'; message: string }
+  /** We could not ask (network, 5xx, expired session, rate limit...): says nothing about the ticket. */
+  | { kind: 'error'; message: string };
+
+/** Only a definite "no such ticket" is a verdict on the ticket; every other failure is ours. */
+const isVerdict = (error: unknown) =>
+  error instanceof ApiError && (error.status === 404 || error.code === 'VALIDATION_FAILED');
 
 export default function AdminCheckin() {
   const [code, setCode] = useState('');
@@ -16,16 +25,20 @@ export default function AdminCheckin() {
 
   const checkin = useMutation({
     mutationFn: (value: string) => api<CheckinResult>('/api/admin/checkin', { body: { code: value } }),
-    onSuccess: (result) => setOutcome({ kind: 'result', result }),
-    onError: (error) =>
-      setOutcome({
-        kind: 'error',
-        message: error instanceof ApiError && error.status === 404 ? 'No ticket has that code.' : errorMessage(error),
-      }),
-    onSettled: () => {
+    onSuccess: (result) => {
+      setOutcome({ kind: 'result', result });
       setCode('');
-      input.current?.focus();
     },
+    onError: (error) => {
+      if (isVerdict(error)) {
+        setOutcome({ kind: 'invalid', message: 'No ticket has that code.' });
+        setCode('');
+      } else {
+        // Keep the code so staff can press Enter again once the problem clears.
+        setOutcome({ kind: 'error', message: errorMessage(error) });
+      }
+    },
+    onSettled: () => input.current?.focus(),
   });
 
   const onSubmit = (e: FormEvent) => {
@@ -61,11 +74,18 @@ export default function AdminCheckin() {
 
       <div role="status" aria-live="polite" className="mt-8">
         {outcome?.kind === 'result' && <ResultPanel result={outcome.result} />}
-        {outcome?.kind === 'error' && (
+        {outcome?.kind === 'invalid' && (
           <Card className="flex flex-col items-center gap-2 border-danger p-8 text-center">
             <CircleX aria-hidden className="size-16 text-danger" />
             <p className="font-display text-2xl font-bold text-danger">Not valid</p>
             <p className="text-muted">{outcome.message}</p>
+          </Card>
+        )}
+        {outcome?.kind === 'error' && (
+          <Card className="flex flex-col items-center gap-2 p-8 text-center">
+            <RotateCcw aria-hidden className="size-12 text-muted" />
+            <p className="font-display text-2xl font-bold text-ink">Could not check, try again</p>
+            <p className="text-muted">{outcome.message} The code is still in the box: press Enter to retry.</p>
           </Card>
         )}
       </div>
