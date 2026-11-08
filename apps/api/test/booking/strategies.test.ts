@@ -280,4 +280,88 @@ describe('redis strategy gate', () => {
     expect(result).toEqual({ ok: false, takenSeatIds: [a] });
     expect(await ctx.deps.redis.exists(seatKey(eventId, a), seatKey(eventId, b))).toBe(0);
   });
+
+  /*
+   * Regression for the gate leak found in the B1 re-review (gate-leak-probe.mts): Alice's
+   * release of her first hold P commits between the strategy's Lua claim (which took over P's
+   * gates) and its Postgres transaction. Postgres then refuses the new hold, and the gates
+   * used to go back to P, which no longer existed, blocking the seats under redis until the TTL.
+   */
+  it('deletes the gates instead of giving them to a previous hold that ended before the refused claim', async () => {
+    const [a, b, c] = seats as [number, number, number];
+    const first = await redis.hold(ctx.deps, { eventId, userId: alice, seatIds: [a, b], ttlSec: 300 });
+    if (!first.ok) throw new Error('first hold failed');
+    await ctx.deps.db.query(`UPDATE event_seats SET status = 'sold', order_id = gen_random_uuid() WHERE id = $1`, [c]);
+
+    // pool.query (the strategy's peek) checks out clients with a callback; withTx asks for a promise.
+    const pool = ctx.deps.db;
+    const realConnect = pool.connect.bind(pool) as (cb?: unknown) => unknown;
+    let interleaved = false;
+    vi.spyOn(pool, 'connect').mockImplementation(((cb?: unknown) => {
+      if (typeof cb === 'function' || interleaved) return realConnect(cb);
+      interleaved = true;
+      return releaseHold(ctx.deps, first.hold.id, alice).then(() => realConnect());
+    }) as typeof pool.connect);
+
+    const result = await redis.hold(ctx.deps, { eventId, userId: alice, seatIds: [a, b, c], ttlSec: 300 });
+    vi.restoreAllMocks();
+
+    expect(interleaved).toBe(true);
+    expect(result).toEqual({ ok: false, takenSeatIds: [c] });
+    expect(await holdStatus(ctx, first.hold.id)).toBe('released');
+    expect(await ctx.deps.redis.exists(seatKey(eventId, a), seatKey(eventId, b))).toBe(0);
+    expect((await redis.hold(ctx.deps, { eventId, userId: bob, seatIds: [a, b], ttlSec: 300 })).ok).toBe(true);
+  });
+
+  it('a release of the previous hold queued behind a refused claim still clears the gates handed back to it', async () => {
+    const [a, b, c] = seats as [number, number, number];
+    const first = await redis.hold(ctx.deps, { eventId, userId: alice, seatIds: [a, b], ttlSec: 300 });
+    if (!first.ok) throw new Error('first hold failed');
+    await ctx.deps.db.query(`UPDATE event_seats SET status = 'sold', order_id = gen_random_uuid() WHERE id = $1`, [c]);
+
+    // Once the strategy's transaction has locked P (it inserts the new hold right after), Alice
+    // releases P from another tab; that release waits for the lock.
+    const pool = ctx.deps.db;
+    const realConnect = pool.connect.bind(pool) as (cb?: unknown) => Promise<import('pg').PoolClient>;
+    let releasing: Promise<void> | undefined;
+    vi.spyOn(pool, 'connect').mockImplementation(((cb?: unknown) => {
+      if (typeof cb === 'function' || releasing) return realConnect(cb);
+      return realConnect().then((client) => {
+        const query = client.query.bind(client) as (...args: unknown[]) => Promise<unknown>;
+        const release = client.release.bind(client);
+        client.query = (async (...args: unknown[]) => {
+          if (!releasing && String(args[0]).includes('INSERT INTO holds')) {
+            releasing = releaseHold(ctx.deps, first.hold.id, alice);
+            await waitForLockWaiter();
+          }
+          return query(...args);
+        }) as typeof client.query;
+        client.release = ((err?: Error | boolean) => {
+          client.query = query as typeof client.query;
+          client.release = release;
+          return release(err);
+        }) as typeof client.release;
+        return client;
+      });
+    }) as typeof pool.connect);
+
+    const result = await redis.hold(ctx.deps, { eventId, userId: alice, seatIds: [a, b, c], ttlSec: 300 });
+    vi.restoreAllMocks();
+    await releasing;
+
+    expect(result).toEqual({ ok: false, takenSeatIds: [c] });
+    expect(await holdStatus(ctx, first.hold.id)).toBe('released');
+    expect(await ctx.deps.redis.exists(seatKey(eventId, a), seatKey(eventId, b))).toBe(0);
+  });
 });
+
+async function waitForLockWaiter(): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    const { rows } = await ctx.deps.db.query<{ n: number }>(
+      `SELECT count(*) AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`,
+    );
+    if (rows[0]!.n > 0) return;
+    await sleep(10);
+  }
+  throw new Error('the release never waited for the lock');
+}

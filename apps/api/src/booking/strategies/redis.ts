@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
+import { isRetryable } from '../../db';
 import { claimIfAvailable } from './conditional';
 import { holdInTx, peekPreviousHold } from '../seats';
-import type { FreedSeat, HoldResult, HoldStrategy } from './types';
+import type { FreedSeat, HoldStrategy } from './types';
 
 /*
  * The redis strategy puts a gate in front of Postgres: `sl:seat:{eventId}:{seatId}` holds the
@@ -89,19 +90,22 @@ async function claimSeatGates(
   };
 }
 
-/** Hands a refused claim's gates back: inherited ones to the previous hold, the rest deleted. */
+/**
+ * Hands a refused claim's gates back: the ones inherited from `restoreTo` go back to it, with
+ * the time they had left; every other one, and all of them when `restoreTo` is null, is deleted.
+ */
 async function giveBackSeatGates(
   redis: Redis,
   eventId: string,
   seatIds: number[],
   holdId: string,
-  previousHoldId: string | null,
+  restoreTo: string | null,
   inherited: Map<number, number>,
 ): Promise<void> {
   const keys = seatIds.map((id) => seatKey(eventId, id));
   const now = Date.now();
-  const ttls = seatIds.map((id) => Math.max(0, (inherited.get(id) ?? now) - now));
-  await redis.eval(GIVE_BACK, keys.length, ...keys, holdId, previousHoldId ?? '', ...ttls);
+  const ttls = seatIds.map((id) => (restoreTo === null ? 0 : Math.max(0, (inherited.get(id) ?? now) - now)));
+  await redis.eval(GIVE_BACK, keys.length, ...keys, holdId, restoreTo ?? '', ...ttls);
 }
 
 /** Drops the gates of freed seats, each only if its hold still owns it. */
@@ -151,18 +155,33 @@ export const redis: HoldStrategy = {
     );
     if (claim.taken.length > 0) return { ok: false, takenSeatIds: claim.taken };
 
-    const giveBack = () =>
-      giveBackSeatGates(deps.redis, input.eventId, input.seatIds, holdId, previousHoldId, claim.inherited);
-    let result: HoldResult;
+    const giveBack = (restoreTo: string | null) =>
+      giveBackSeatGates(deps.redis, input.eventId, input.seatIds, holdId, restoreTo, claim.inherited);
+    // The buyer's active holds that this attempt's transaction found and locked.
+    const locked = new Set<string>();
+    let handedBack = false;
     try {
-      result = await holdInTx(deps.db, (c) => claimIfAvailable(c, input, 'redis', holdId));
+      return await holdInTx(deps.db, async (c) => {
+        locked.clear();
+        try {
+          return await claimIfAvailable(c, input, 'redis', holdId, (ids) => ids.forEach((id) => locked.add(id)));
+        } catch (e) {
+          // Postgres said no (a seat sold through another strategy, a payment in flight...). Hand
+          // the gates back now, before the rollback. The previous hold gets its own back only if
+          // this transaction found it active and locked: then it is still live, and a release or
+          // expiry of it waits for this lock and then compare-and-deletes them. In every other
+          // case, say it ended after the peek above, they are deleted, never left blocking seats.
+          // A deadlock or serialization failure is retried by withTx with the gates kept.
+          if (!isRetryable(e)) {
+            handedBack = true;
+            await giveBack(previousHoldId !== null && locked.has(previousHoldId) ? previousHoldId : null);
+          }
+          throw e;
+        }
+      });
     } catch (e) {
-      await giveBack();
+      if (!handedBack) await giveBack(null);
       throw e;
     }
-    // Postgres said no (say, the seat was sold through another strategy): the transaction rolled
-    // back, so the previous hold is still live and gets its gates back.
-    if (!result.ok) await giveBack();
-    return result;
   },
 };

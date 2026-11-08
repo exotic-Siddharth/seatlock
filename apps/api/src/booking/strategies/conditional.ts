@@ -10,15 +10,18 @@ import type { HoldInput, HoldStrategy, HoldSuccess } from './types';
  * READ COMMITTED, a writer that finds a row locked waits, then re-checks the WHERE against the
  * newest version of the row, so exactly one transaction wins each seat. Fewer rows than seats
  * asked for means someone else won some of them: roll back, so nothing is half-held.
+ * `onPreviousLocked` hears which of the buyer's active holds this transaction locked (redis
+ * uses it to decide whose gates a refused claim may hand back).
  */
 export async function claimIfAvailable(
   c: Queryable,
   input: HoldInput,
   strategy: StrategyName,
   holdId?: string,
+  onPreviousLocked?: (holdIds: string[]) => void,
 ): Promise<HoldSuccess> {
   await lockBuyer(c, input.userId, input.eventId);
-  const freed = await releasePreviousHold(c, input.userId, input.eventId);
+  const freed = await releasePreviousHold(c, input.userId, input.eventId, onPreviousLocked);
   const hold = await insertHold(c, input, strategy, holdId);
   const { rows } = await c.query<{ id: number }>(
     `UPDATE event_seats
