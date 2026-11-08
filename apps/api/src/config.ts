@@ -11,7 +11,6 @@ export type Config = {
   redisUrl: string;
   /** Bare origin (no trailing slash) that cookie-authenticated mutations must come from. */
   webOrigin: string;
-  sessionSecretPepper: string | undefined;
   queueTokenSecret: string;
   mockpayWebhookSecret: string;
   mockpayWebhookUrl: string;
@@ -61,7 +60,6 @@ const EnvSchema = z.object({
     .url()
     .default('http://localhost:5175')
     .transform((v) => new URL(v).origin),
-  SESSION_SECRET_PEPPER: z.string().optional(),
   QUEUE_TOKEN_SECRET: z.string().optional(),
   MOCKPAY_WEBHOOK_SECRET: z.string().optional(),
   METRICS_TOKEN: z.string().optional(),
@@ -97,10 +95,6 @@ function resolveSecrets(env: Env, problems: string[]) {
     mockpayWebhookSecret: value('MOCKPAY_WEBHOOK_SECRET'),
     metricsToken: value('METRICS_TOKEN'),
   };
-  const pepper = env.SESSION_SECRET_PEPPER;
-  if (production && pepper !== undefined && pepper.length < MIN_SECRET_LENGTH) {
-    problems.push(`SESSION_SECRET_PEPPER: must be at least ${MIN_SECRET_LENGTH} characters`);
-  }
   return { secrets, generated };
 }
 
@@ -128,7 +122,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     databaseUrl: e.DATABASE_URL,
     redisUrl: e.REDIS_URL,
     webOrigin: e.WEB_ORIGIN,
-    sessionSecretPepper: e.SESSION_SECRET_PEPPER,
     ...secrets,
     mockpayWebhookUrl: e.MOCKPAY_WEBHOOK_URL,
     mockpayLatencyMs: e.MOCKPAY_LATENCY_MS,
