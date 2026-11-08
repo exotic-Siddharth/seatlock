@@ -99,9 +99,12 @@ export default function AdminDashboard() {
           <Button variant="secondary" onClick={() => setDialog('reopen')}>
             <RotateCcw aria-hidden className="size-4" /> Reopen sale
           </Button>
-          <Button variant="secondary" onClick={() => setDialog('crowd')}>
-            <Users aria-hidden className="size-4" /> Simulate crowd
-          </Button>
+          {/* The bots join the waiting room, so the tool exists only where there is one. */}
+          {d.queue !== null && (
+            <Button variant="secondary" onClick={() => setDialog('crowd')}>
+              <Users aria-hidden className="size-4" /> Simulate crowd
+            </Button>
+          )}
         </div>
       </div>
 
