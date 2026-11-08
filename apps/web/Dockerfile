@@ -11,6 +11,9 @@ RUN npm ci -w @seatlock/web -w @seatlock/shared --include-workspace-root
 COPY tsconfig.base.json ./
 COPY packages/shared packages/shared
 COPY apps/web apps/web
+# The Lab page bundles loadtest/results/summary.json at build time (import.meta.glob). Copying the
+# folder, not results/ itself, still works before any results exist.
+COPY loadtest/ loadtest/
 RUN npm run build -w @seatlock/web
 
 # nginx serves the SPA and load-balances /api across the API replicas.
