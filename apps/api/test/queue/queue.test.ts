@@ -150,7 +150,9 @@ describe('admission', () => {
     const first = await getQueueStatus(ctx.deps, event, userId!);
     expect(first.state).toBe('admitted');
     expect(first.token).not.toBeNull();
-    expect(verifyQueueToken(ctx.deps.config.queueTokenSecret, first.token!, { eventId, userId: userId! })).toBe(true);
+    expect(
+      verifyQueueToken(ctx.deps.config.queueTokenSecret, first.token!, { eventId, userId: userId!, saleOpensAt: event.saleOpensAt.getTime() }),
+    ).toBe(true);
     expect(Date.parse(first.tokenExpiresAt!) - Date.now()).toBeGreaterThan(14 * MIN);
     expect(Date.parse(first.tokenExpiresAt!) - Date.now()).toBeLessThanOrEqual(15 * MIN);
 

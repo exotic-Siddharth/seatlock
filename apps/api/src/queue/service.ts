@@ -121,7 +121,7 @@ export async function getQueueStatus(deps: AppDeps, event: QueueEvent, userId: s
 
   return makeStatus(event, now, 'admitted', {
     queueLength,
-    token: signQueueToken(deps.config.queueTokenSecret, { e: event.id, u: userId, exp: tokenExp }),
+    token: signQueueToken(deps.config.queueTokenSecret, { e: event.id, u: userId, exp: tokenExp, s: event.saleOpensAt.getTime() }),
     tokenExpiresAt: new Date(tokenExp).toISOString(),
   });
 }

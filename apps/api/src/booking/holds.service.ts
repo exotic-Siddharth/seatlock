@@ -38,6 +38,7 @@ type HoldableEvent = {
   queueEnabled: boolean;
   maxSeatsPerOrder: number;
   holdTtlSeconds: number;
+  saleOpensAt: Date;
   saleOpen: boolean;
   saleClosed: boolean;
 };
@@ -45,7 +46,7 @@ type HoldableEvent = {
 async function loadEvent(db: Queryable, eventId: string): Promise<HoldableEvent | undefined> {
   const { rows } = await db.query<HoldableEvent>(
     `SELECT e.id, e.slug, e.title, v.layout, e.queue_enabled AS "queueEnabled",
-            e.max_seats_per_order AS "maxSeatsPerOrder", e.hold_ttl_seconds AS "holdTtlSeconds",
+            e.max_seats_per_order AS "maxSeatsPerOrder", e.hold_ttl_seconds AS "holdTtlSeconds", e.sale_opens_at AS "saleOpensAt",
             now() >= e.sale_opens_at AS "saleOpen", now() >= e.starts_at AS "saleClosed"
        FROM events e JOIN venues v ON v.id = e.venue_id
       WHERE e.id = $1`,
@@ -97,7 +98,8 @@ export async function createHold(deps: AppDeps, req: HoldRequest): Promise<Hold>
   }
   if (event.queueEnabled) {
     if (!req.queueToken) throw new AppError('QUEUE_REQUIRED', 'Join the waiting room to buy seats for this event');
-    if (!verifyQueueToken(deps.config.queueTokenSecret, req.queueToken, { eventId: event.id, userId: req.userId })) {
+    const expected = { eventId: event.id, userId: req.userId, saleOpensAt: event.saleOpensAt.getTime() };
+    if (!verifyQueueToken(deps.config.queueTokenSecret, req.queueToken, expected)) {
       throw new AppError('QUEUE_TOKEN_INVALID', 'Your waiting-room pass is not valid for this event any more');
     }
   }
