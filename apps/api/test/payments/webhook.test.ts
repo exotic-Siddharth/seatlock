@@ -180,6 +180,36 @@ describe('POST /api/webhooks/mockpay', () => {
     expect(publish).toHaveBeenCalledWith(eventId, [{ id: a, st: 'A' }]);
   });
 
+  it('refunds a success that lands after the buyer released the checkout, and sells nothing', async () => {
+    const { eventId, seatIds } = await createOnSaleEvent(ctx);
+    const seats = seatIds.slice(0, 2);
+    const { holdId, orderId, intentId } = await holdAndOrder(ctx, alice.bearer, eventId, seats);
+    // The payment's webhook is long overdue, so the buyer may give the seats back.
+    await ctx.deps.db.query(
+      `UPDATE payment_intents SET status = 'processing', updated_at = now() - interval '61 seconds' WHERE id = $1`,
+      [intentId],
+    );
+    expect((await request(ctx.app).delete(`/api/holds/${holdId}`).set(alice.bearer)).status).toBe(204);
+
+    const res = await sendWebhook(ctx, succeeded(intentId));
+
+    expect(res.status).toBe(200);
+    expect(await order(alice.bearer, orderId)).toMatchObject({ status: 'failed', failureReason: 'RELEASED', tickets: [] });
+    expect((await intent(intentId)).status).toBe('refunded');
+    expect((await seatRows(ctx, seats)).map((s) => s.status)).toEqual(['available', 'available']);
+  });
+
+  it('ignores a decline that lands after the checkout was closed', async () => {
+    const { eventId, seatIds } = await createOnSaleEvent(ctx);
+    const { holdId, orderId, intentId } = await holdAndOrder(ctx, alice.bearer, eventId, [seatIds[0]!]);
+    expect((await request(ctx.app).delete(`/api/holds/${holdId}`).set(alice.bearer)).status).toBe(204);
+
+    await sendWebhook(ctx, { type: 'payment_intent.failed', intentId, failureCode: 'card_declined' });
+
+    expect(await order(alice.bearer, orderId)).toMatchObject({ status: 'failed', failureReason: 'RELEASED' });
+    expect(await intent(intentId)).toEqual({ status: 'failed', failure_code: null });
+  });
+
   it('naive double-promise: the second payer fails with SEAT_ALREADY_SOLD and the seat has 1 ticket', async () => {
     const naive = getStrategy('naive');
     const { eventId, seatIds } = await createOnSaleEvent(ctx);

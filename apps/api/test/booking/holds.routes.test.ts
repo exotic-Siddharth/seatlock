@@ -5,7 +5,17 @@ import { seatKey } from '../../src/booking/strategies/redis';
 import { sweepOnce } from '../../src/booking/sweeper';
 import { signQueueToken } from '../../src/queue/token';
 import { createOnSaleEvent, createUser, makeCtx, resetState, type TestCtx } from '../helpers';
-import { expireHold, holdStatus, postHold, postOrder, seatRows, type Bearer } from './fixtures';
+import {
+  expireHold,
+  holdStatus,
+  orderState,
+  postHold,
+  postOrder,
+  seatRows,
+  sendWebhook,
+  startPayment,
+  type Bearer,
+} from './fixtures';
 
 let ctx: TestCtx;
 let alice: { user: { id: string }; bearer: Bearer };
@@ -228,17 +238,34 @@ describe('POST /api/holds', () => {
     expect({ ok: after.ok - before.ok, conflict: after.conflict - before.conflict }).toEqual({ ok: 1, conflict: 1 });
   });
 
-  it('answers CHECKOUT_IN_PROGRESS for a new hold while an order for the previous one is pending', async () => {
+  it('answers CHECKOUT_IN_PROGRESS for a new hold while a payment for the previous one is processing', async () => {
     const { eventId, seatIds } = await createOnSaleEvent(ctx);
     const first = await postHold(ctx, alice.bearer, eventId, [seatIds[0]!]);
-    await postOrder(ctx, alice.bearer, first.body.hold.id as string);
+    const order = await postOrder(ctx, alice.bearer, first.body.hold.id as string);
+    await startPayment(ctx, order.body.order.id as string);
 
     const res = await postHold(ctx, alice.bearer, eventId, [seatIds[1]!]);
 
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('CHECKOUT_IN_PROGRESS');
     expect(await holdStatus(ctx, first.body.hold.id as string)).toBe('active');
+    expect(await orderState(ctx, order.body.order.id as string)).toMatchObject({ status: 'pending_payment', intent: 'processing' });
     expect((await seatRows(ctx, [seatIds[1]!]))[0]!.status).toBe('available');
+  });
+
+  it('replaces a previous hold whose card was declined, failing its order with REPLACED', async () => {
+    const { eventId, seatIds } = await createOnSaleEvent(ctx);
+    const [a, b] = seatIds as [number, number];
+    const first = await postHold(ctx, alice.bearer, eventId, [a]);
+    const order = await postOrder(ctx, alice.bearer, first.body.hold.id as string);
+    await sendWebhook(ctx, { type: 'payment_intent.failed', intentId: order.body.payment.intentId as string, failureCode: 'card_declined' });
+
+    const res = await postHold(ctx, alice.bearer, eventId, [b]);
+
+    expect(res.status).toBe(201);
+    expect(await holdStatus(ctx, first.body.hold.id as string)).toBe('released');
+    expect(await orderState(ctx, order.body.order.id as string)).toEqual({ status: 'failed', failureReason: 'REPLACED', intent: 'failed' });
+    expect((await seatRows(ctx, [a, b])).map((s) => s.status)).toEqual(['available', 'held']);
   });
 });
 
@@ -297,22 +324,84 @@ describe('DELETE /api/holds/:id', () => {
     expect(await holdStatus(ctx, created.body.hold.id as string)).toBe('active');
   });
 
-  it('keeps the hold while its order is being paid', async () => {
+  it('keeps the hold while a payment for it is processing', async () => {
     const { eventId, seatIds } = await createOnSaleEvent(ctx);
     const created = await postHold(ctx, alice.bearer, eventId, [seatIds[0]!]);
-    await postOrder(ctx, alice.bearer, created.body.hold.id as string);
+    const order = await postOrder(ctx, alice.bearer, created.body.hold.id as string);
+    await startPayment(ctx, order.body.order.id as string, 59);
 
     const res = await request(ctx.app).delete(`/api/holds/${created.body.hold.id}`).set(alice.bearer);
 
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('CHECKOUT_IN_PROGRESS');
+    expect(await holdStatus(ctx, created.body.hold.id as string)).toBe('active');
+    expect(await orderState(ctx, order.body.order.id as string)).toMatchObject({ status: 'pending_payment', intent: 'processing' });
   });
 
-  it('answers 204 for a hold the sweeper has already expired, even if its order never got paid', async () => {
+  it('releases a hold after a declined card: the order fails with RELEASED and the seats go back on sale', async () => {
+    const { eventId, seatIds } = await createOnSaleEvent(ctx);
+    const [a, b] = seatIds as [number, number];
+    const created = await postHold(ctx, alice.bearer, eventId, [a, b]);
+    const id = created.body.hold.id as string;
+    const order = await postOrder(ctx, alice.bearer, id);
+    await sendWebhook(ctx, { type: 'payment_intent.failed', intentId: order.body.payment.intentId as string, failureCode: 'card_declined' });
+    const publish = vi.spyOn(ctx.deps.publisher, 'publish');
+
+    const res = await request(ctx.app).delete(`/api/holds/${id}`).set(alice.bearer);
+
+    expect(res.status).toBe(204);
+    expect(await holdStatus(ctx, id)).toBe('released');
+    expect((await seatRows(ctx, [a, b])).map((s) => s.status)).toEqual(['available', 'available']);
+    expect(await orderState(ctx, order.body.order.id as string)).toEqual({ status: 'failed', failureReason: 'RELEASED', intent: 'failed' });
+    expect(publish).toHaveBeenCalledWith(eventId, [
+      { id: a, st: 'A' },
+      { id: b, st: 'A' },
+    ]);
+  });
+
+  it('releases a hold whose order never got a payment', async () => {
+    const { eventId, seatIds } = await createOnSaleEvent(ctx);
+    const created = await postHold(ctx, alice.bearer, eventId, [seatIds[0]!]);
+    const order = await postOrder(ctx, alice.bearer, created.body.hold.id as string);
+
+    const res = await request(ctx.app).delete(`/api/holds/${created.body.hold.id}`).set(alice.bearer);
+
+    expect(res.status).toBe(204);
+    expect(await orderState(ctx, order.body.order.id as string)).toEqual({ status: 'failed', failureReason: 'RELEASED', intent: 'failed' });
+  });
+
+  it('releases a hold whose payment has been processing for over 60 s (its webhook is long overdue)', async () => {
+    const { eventId, seatIds } = await createOnSaleEvent(ctx);
+    const created = await postHold(ctx, alice.bearer, eventId, [seatIds[0]!]);
+    const order = await postOrder(ctx, alice.bearer, created.body.hold.id as string);
+    await startPayment(ctx, order.body.order.id as string, 61);
+
+    const res = await request(ctx.app).delete(`/api/holds/${created.body.hold.id}`).set(alice.bearer);
+
+    expect(res.status).toBe(204);
+    expect(await holdStatus(ctx, created.body.hold.id as string)).toBe('released');
+    expect(await orderState(ctx, order.body.order.id as string)).toEqual({ status: 'failed', failureReason: 'RELEASED', intent: 'failed' });
+  });
+
+  it('releases a lapsed hold that the sweeper has not reached yet, failing its unpaid order', async () => {
     const { eventId, seatIds } = await createOnSaleEvent(ctx);
     const created = await postHold(ctx, alice.bearer, eventId, [seatIds[0]!]);
     const id = created.body.hold.id as string;
-    await postOrder(ctx, alice.bearer, id);
+    const order = await postOrder(ctx, alice.bearer, id);
+    await expireHold(ctx, id);
+
+    const res = await request(ctx.app).delete(`/api/holds/${id}`).set(alice.bearer);
+
+    expect(res.status).toBe(204);
+    expect(await holdStatus(ctx, id)).toBe('released');
+    expect(await orderState(ctx, order.body.order.id as string)).toMatchObject({ status: 'failed', failureReason: 'RELEASED' });
+  });
+
+  it('answers 204 for a hold the sweeper has already expired, whose unpaid order the sweep failed', async () => {
+    const { eventId, seatIds } = await createOnSaleEvent(ctx);
+    const created = await postHold(ctx, alice.bearer, eventId, [seatIds[0]!]);
+    const id = created.body.hold.id as string;
+    const order = await postOrder(ctx, alice.bearer, id);
     await expireHold(ctx, id);
     await sweepOnce(ctx.deps);
     expect(await holdStatus(ctx, id)).toBe('expired');
@@ -321,6 +410,20 @@ describe('DELETE /api/holds/:id', () => {
 
     expect(res.status).toBe(204);
     expect(await holdStatus(ctx, id)).toBe('expired');
+    expect(await orderState(ctx, order.body.order.id as string)).toMatchObject({ status: 'failed', failureReason: 'HOLD_EXPIRED' });
+  });
+
+  it('answers 409 HOLD_NOT_ACTIVE for a hold that is already paid for', async () => {
+    const { eventId, seatIds } = await createOnSaleEvent(ctx);
+    const created = await postHold(ctx, alice.bearer, eventId, [seatIds[0]!]);
+    const order = await postOrder(ctx, alice.bearer, created.body.hold.id as string);
+    await sendWebhook(ctx, { type: 'payment_intent.succeeded', intentId: order.body.payment.intentId as string });
+
+    const res = await request(ctx.app).delete(`/api/holds/${created.body.hold.id}`).set(alice.bearer);
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('HOLD_NOT_ACTIVE');
+    expect(await orderState(ctx, order.body.order.id as string)).toMatchObject({ status: 'paid', intent: 'succeeded' });
   });
 });
 

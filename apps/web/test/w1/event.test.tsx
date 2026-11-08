@@ -91,6 +91,26 @@ describe('Event page: picking seats', () => {
     expect(holdButton().textContent).toBe('Hold 1 seat');
   });
 
+  it('explains that a payment for the earlier seats is still processing, without asking to release them', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      'GET /api/events/monsoon-static': [200, { event: makeEvent() }],
+      [SEATS_ROUTE]: [200, makeSnapshot()],
+      'POST /api/holds': [
+        409,
+        { error: { code: 'CHECKOUT_IN_PROGRESS', message: 'A payment for your seats on this event is still processing' } },
+      ],
+    });
+    renderEvent();
+
+    await user.click(await seat('Sec A, Row A, Seat 1, Gold, ₹2,499, available'));
+    await user.click(holdButton());
+
+    expect(await screen.findByText('A payment for your seats is still processing')).toBeTruthy();
+    expect(screen.getByText(/Wait a moment for it to finish/)).toBeTruthy();
+    expect(screen.queryByText(/release that checkout/)).toBeNull();
+  });
+
   it('applies live updates and deselects a seat someone else takes', async () => {
     const user = userEvent.setup();
     mockApi({ 'GET /api/events/monsoon-static': [200, { event: makeEvent() }], [SEATS_ROUTE]: [200, makeSnapshot()] });
@@ -123,6 +143,7 @@ describe('Event page: picking seats', () => {
     renderEvent();
     expect(await seat('Sec A, Row B, Seat 1, Gold, ₹2,499, held by you')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Continue to checkout' }).getAttribute('href')).toBe(`/checkout/${HOLD_ID}`);
+    expect(screen.getByText(/Holding other seats gives these back, unless a payment for them is processing/)).toBeTruthy();
   });
 
   it('shows a not-found state for an unknown event', async () => {

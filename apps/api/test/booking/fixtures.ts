@@ -92,6 +92,29 @@ export async function seatRows(ctx: TestCtx, seatIds: number[]) {
   return rows;
 }
 
+/** What MockPay's confirm records: an attempt for the order in flight since `secondsAgo`. */
+export async function startPayment(ctx: TestCtx, orderId: string, secondsAgo = 0): Promise<void> {
+  await ctx.deps.db.query(
+    `UPDATE payment_intents SET status = 'processing', attempts = attempts + 1, updated_at = now() - make_interval(secs => $2)
+      WHERE order_id = $1`,
+    [orderId, secondsAgo],
+  );
+}
+
+/** The order's status and failure reason, and the status of its payment intent. */
+export async function orderState(
+  ctx: TestCtx,
+  orderId: string,
+): Promise<{ status: string; failureReason: string | null; intent: string } | undefined> {
+  const { rows } = await ctx.deps.db.query<{ status: string; failureReason: string | null; intent: string }>(
+    `SELECT o.status::text AS status, o.failure_reason AS "failureReason", pi.status AS intent
+       FROM orders o JOIN payment_intents pi ON pi.order_id = o.id
+      WHERE o.id = $1`,
+    [orderId],
+  );
+  return rows[0];
+}
+
 export async function holdStatus(ctx: TestCtx, holdId: string): Promise<string | undefined> {
   const { rows } = await ctx.deps.db.query<{ status: string }>('SELECT status::text AS status FROM holds WHERE id = $1', [
     holdId,

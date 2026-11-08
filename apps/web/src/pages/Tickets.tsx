@@ -67,7 +67,7 @@ function OrderCard({ order }: { order: Order }) {
         </div>
         <div className="flex items-center gap-3">
           <span className="font-display font-semibold text-ink tabular-nums">{formatInr(order.amountPaise)}</span>
-          <OrderStatusBadge status={order.status} />
+          <OrderStatusBadge order={order} />
         </div>
       </div>
 

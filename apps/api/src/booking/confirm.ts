@@ -33,8 +33,9 @@ export async function applyPaymentEvent(deps: AppDeps, event: PaymentEvent): Pro
     ]);
     if (fresh.rowCount === 0) return null; // a redelivery of an event already applied
 
-    // The hold is locked with the order, before any seat: the sweeper (which skips locked holds)
-    // and order creation (which locks the hold first) then wait for this transaction or pass it by.
+    // The hold is locked, then the order, before the intent or any seat: the lock order of every
+    // checkout path (seats.ts), so the sweeper (which skips locked holds), order creation and a
+    // release wait for this transaction or pass it by, and never deadlock with it.
     const { rows } = await c.query<PayingOrder>(
       `SELECT o.id, o.user_id AS "userId", o.event_id AS "eventId", o.hold_id AS "holdId", o.status,
               h.seat_ids AS "seatIds", h.strategy
@@ -42,11 +43,18 @@ export async function applyPaymentEvent(deps: AppDeps, event: PaymentEvent): Pro
          JOIN orders o ON o.id = pi.order_id
          JOIN holds h ON h.id = o.hold_id
         WHERE pi.id = $1
-          FOR UPDATE OF o, h`,
+          FOR UPDATE OF h, o`,
       [event.data.intentId],
     );
     const order = rows[0];
-    if (!order || order.status !== 'pending_payment') return null;
+    if (!order) return null;
+    if (order.status === 'failed' && event.type === 'payment_intent.succeeded') {
+      // The checkout was closed (released, replaced or expired) while this payment was on its way:
+      // nothing is sold, and the money goes back to the buyer.
+      await c.query(`UPDATE payment_intents SET status = 'refunded', updated_at = now() WHERE id = $1`, [event.data.intentId]);
+      return null;
+    }
+    if (order.status !== 'pending_payment') return null;
 
     if (event.type === 'payment_intent.failed') {
       // The hold stays as it is, so the buyer can try another card until it expires.
