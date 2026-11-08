@@ -1,0 +1,361 @@
+{
+  "generatedAt": "2026-11-08T09:25:54.376Z",
+  "machine": {
+    "cpu": "11th Gen Intel(R) Core(TM) i7-1195G7 @ 2.90GHz",
+    "logicalCores": 8,
+    "ramGb": 31.7,
+    "dockerCpus": 8,
+    "dockerMemGb": 15.5,
+    "apiReplicas": 2,
+    "notes": "k6, nginx, the API replicas, Postgres and Redis all ran on this one machine (Docker Desktop, WSL2), so they competed for the same CPUs. the API replicas ran with LOG_LEVEL=warn, so per-request logging was off. commit 7d01a1f. Run on the author's laptop while another unrelated CPU-heavy python job (ML training from a different project) kept the CPU at ~90%; idle Postgres/Redis containers of two other projects were also running. Numbers are therefore pessimistic; correctness invariants are unaffected."
+  },
+  "runs": [
+    {
+      "scenario": "hot-seat",
+      "strategy": "naive",
+      "vus": 1000,
+      "durationSec": 10.31,
+      "holds": {
+        "attempts": 1000,
+        "success": 1,
+        "conflict": 999,
+        "errors": 0
+      },
+      "holdLatencyMs": {
+        "p50": 5295.1,
+        "p95": 8814.1,
+        "p99": 9142.4,
+        "max": 10050.1
+      },
+      "httpReqsPerSec": 97.2,
+      "ticketsSold": 0,
+      "seatsTotal": 10000,
+      "invariants": {
+        "oversoldSeats": 0,
+        "soldSeatsWithoutTicket": 0,
+        "ticketsOnUnsoldSeats": 0,
+        "paidOrdersWithoutTickets": 0,
+        "ticketsWithoutPaidOrder": 0,
+        "paidAmountMismatch": 0,
+        "doublePromisedSeats": 0,
+        "refundedOrders": 0,
+        "pass": true
+      },
+      "orders": {
+        "created": 0,
+        "paid": 0,
+        "failed": 0,
+        "errors": 0,
+        "timeouts": 0
+      },
+      "vuAborted": 0
+    },
+    {
+      "scenario": "hot-seat",
+      "strategy": "pessimistic",
+      "vus": 1000,
+      "durationSec": 8.91,
+      "holds": {
+        "attempts": 1000,
+        "success": 1,
+        "conflict": 999,
+        "errors": 0
+      },
+      "holdLatencyMs": {
+        "p50": 6310.8,
+        "p95": 8161.3,
+        "p99": 8266.8,
+        "max": 8632.4
+      },
+      "httpReqsPerSec": 112.4,
+      "ticketsSold": 0,
+      "seatsTotal": 10000,
+      "invariants": {
+        "oversoldSeats": 0,
+        "soldSeatsWithoutTicket": 0,
+        "ticketsOnUnsoldSeats": 0,
+        "paidOrdersWithoutTickets": 0,
+        "ticketsWithoutPaidOrder": 0,
+        "paidAmountMismatch": 0,
+        "doublePromisedSeats": 0,
+        "refundedOrders": 0,
+        "pass": true
+      },
+      "orders": {
+        "created": 0,
+        "paid": 0,
+        "failed": 0,
+        "errors": 0,
+        "timeouts": 0
+      },
+      "vuAborted": 0
+    },
+    {
+      "scenario": "hot-seat",
+      "strategy": "conditional",
+      "vus": 1000,
+      "durationSec": 7.56,
+      "holds": {
+        "attempts": 1000,
+        "success": 1,
+        "conflict": 999,
+        "errors": 0
+      },
+      "holdLatencyMs": {
+        "p50": 4405.7,
+        "p95": 6511.2,
+        "p99": 6820.9,
+        "max": 7259.7
+      },
+      "httpReqsPerSec": 132.5,
+      "ticketsSold": 0,
+      "seatsTotal": 10000,
+      "invariants": {
+        "oversoldSeats": 0,
+        "soldSeatsWithoutTicket": 0,
+        "ticketsOnUnsoldSeats": 0,
+        "paidOrdersWithoutTickets": 0,
+        "ticketsWithoutPaidOrder": 0,
+        "paidAmountMismatch": 0,
+        "doublePromisedSeats": 0,
+        "refundedOrders": 0,
+        "pass": true
+      },
+      "orders": {
+        "created": 0,
+        "paid": 0,
+        "failed": 0,
+        "errors": 0,
+        "timeouts": 0
+      },
+      "vuAborted": 0
+    },
+    {
+      "scenario": "hot-seat",
+      "strategy": "redis",
+      "vus": 1000,
+      "durationSec": 6.5,
+      "holds": {
+        "attempts": 1000,
+        "success": 1,
+        "conflict": 999,
+        "errors": 0
+      },
+      "holdLatencyMs": {
+        "p50": 2566.9,
+        "p95": 5333.8,
+        "p99": 5866.3,
+        "max": 5951.2
+      },
+      "httpReqsPerSec": 154.1,
+      "ticketsSold": 0,
+      "seatsTotal": 10000,
+      "invariants": {
+        "oversoldSeats": 0,
+        "soldSeatsWithoutTicket": 0,
+        "ticketsOnUnsoldSeats": 0,
+        "paidOrdersWithoutTickets": 0,
+        "ticketsWithoutPaidOrder": 0,
+        "paidAmountMismatch": 0,
+        "doublePromisedSeats": 0,
+        "refundedOrders": 0,
+        "pass": true
+      },
+      "orders": {
+        "created": 0,
+        "paid": 0,
+        "failed": 0,
+        "errors": 0,
+        "timeouts": 0
+      },
+      "vuAborted": 0
+    },
+    {
+      "scenario": "flash-sale",
+      "strategy": "naive",
+      "vus": 2000,
+      "durationSec": 132.27,
+      "holds": {
+        "attempts": 2813,
+        "success": 794,
+        "conflict": 210,
+        "errors": 1809
+      },
+      "holdLatencyMs": {
+        "p50": 66.4,
+        "p95": 56581.2,
+        "p99": 59996.8,
+        "max": 60077.8
+      },
+      "httpReqsPerSec": 68,
+      "ticketsSold": 1212,
+      "seatsTotal": 10000,
+      "invariants": {
+        "oversoldSeats": 0,
+        "soldSeatsWithoutTicket": 0,
+        "ticketsOnUnsoldSeats": 0,
+        "paidOrdersWithoutTickets": 0,
+        "ticketsWithoutPaidOrder": 0,
+        "paidAmountMismatch": 0,
+        "doublePromisedSeats": 5,
+        "refundedOrders": 1,
+        "pass": true
+      },
+      "orders": {
+        "created": 609,
+        "paid": 473,
+        "failed": 0,
+        "errors": 151,
+        "timeouts": 80
+      },
+      "vuAborted": 1615
+    },
+    {
+      "scenario": "flash-sale",
+      "strategy": "pessimistic",
+      "vus": 2000,
+      "durationSec": 125.5,
+      "holds": {
+        "attempts": 6305,
+        "success": 3073,
+        "conflict": 3085,
+        "errors": 147
+      },
+      "holdLatencyMs": {
+        "p50": 1916.8,
+        "p95": 16502.9,
+        "p99": 53295.4,
+        "max": 60001.2
+      },
+      "httpReqsPerSec": 157.3,
+      "ticketsSold": 5409,
+      "seatsTotal": 10000,
+      "invariants": {
+        "oversoldSeats": 0,
+        "soldSeatsWithoutTicket": 0,
+        "ticketsOnUnsoldSeats": 0,
+        "paidOrdersWithoutTickets": 0,
+        "ticketsWithoutPaidOrder": 0,
+        "paidAmountMismatch": 0,
+        "doublePromisedSeats": 0,
+        "refundedOrders": 0,
+        "pass": true
+      },
+      "orders": {
+        "created": 2711,
+        "paid": 2587,
+        "failed": 0,
+        "errors": 26,
+        "timeouts": 119
+      },
+      "vuAborted": 1132
+    },
+    {
+      "scenario": "flash-sale",
+      "strategy": "conditional",
+      "vus": 2000,
+      "durationSec": 126.55,
+      "holds": {
+        "attempts": 5458,
+        "success": 2163,
+        "conflict": 1512,
+        "errors": 1783
+      },
+      "holdLatencyMs": {
+        "p50": 895.1,
+        "p95": 24357.2,
+        "p99": 59996.1,
+        "max": 60022.8
+      },
+      "httpReqsPerSec": 130.6,
+      "ticketsSold": 3624,
+      "seatsTotal": 10000,
+      "invariants": {
+        "oversoldSeats": 0,
+        "soldSeatsWithoutTicket": 0,
+        "ticketsOnUnsoldSeats": 0,
+        "paidOrdersWithoutTickets": 0,
+        "ticketsWithoutPaidOrder": 0,
+        "paidAmountMismatch": 0,
+        "doublePromisedSeats": 0,
+        "refundedOrders": 0,
+        "pass": true
+      },
+      "orders": {
+        "created": 1854,
+        "paid": 1604,
+        "failed": 0,
+        "errors": 145,
+        "timeouts": 189
+      },
+      "vuAborted": 1206
+    },
+    {
+      "scenario": "flash-sale",
+      "strategy": "redis",
+      "vus": 2000,
+      "durationSec": 123.37,
+      "holds": {
+        "attempts": 6487,
+        "success": 2100,
+        "conflict": 1497,
+        "errors": 2890
+      },
+      "holdLatencyMs": {
+        "p50": 708.4,
+        "p95": 7954.1,
+        "p99": 43790,
+        "max": 60002.6
+      },
+      "httpReqsPerSec": 147.1,
+      "ticketsSold": 3442,
+      "seatsTotal": 10000,
+      "invariants": {
+        "oversoldSeats": 0,
+        "soldSeatsWithoutTicket": 0,
+        "ticketsOnUnsoldSeats": 0,
+        "paidOrdersWithoutTickets": 0,
+        "ticketsWithoutPaidOrder": 0,
+        "paidAmountMismatch": 0,
+        "doublePromisedSeats": 0,
+        "refundedOrders": 0,
+        "pass": true
+      },
+      "orders": {
+        "created": 1814,
+        "paid": 1539,
+        "failed": 0,
+        "errors": 131,
+        "timeouts": 211
+      },
+      "vuAborted": 1484
+    }
+  ],
+  "queue": {
+    "vus": 3000,
+    "joinP95Ms": 2959.9,
+    "pollP95Ms": 296.9,
+    "admitRatePerSec": 200,
+    "outOfOrderAdmissions": 0,
+    "admittedTotal": 3000
+  },
+  "problems": [],
+  "warnings": [
+    "flash-sale/naive: 1809 of 2813 hold requests failed (not a 201 or 409), so its latency numbers mix in failures",
+    "flash-sale/naive: 151 order or payment requests failed (not a 201 or 202)",
+    "flash-sale/naive: 80 orders were still unpaid after 30 s (payment webhook did not arrive or was slow)",
+    "flash-sale/naive: 1615 of 2000 VUs aborted early (failed seat-map reads or repeated hold failures), so the load was lower than configured",
+    "flash-sale/pessimistic: 147 of 6305 hold requests failed (not a 201 or 409), so its latency numbers mix in failures",
+    "flash-sale/pessimistic: 26 order or payment requests failed (not a 201 or 202)",
+    "flash-sale/pessimistic: 119 orders were still unpaid after 30 s (payment webhook did not arrive or was slow)",
+    "flash-sale/pessimistic: 1132 of 2000 VUs aborted early (failed seat-map reads or repeated hold failures), so the load was lower than configured",
+    "flash-sale/conditional: 1783 of 5458 hold requests failed (not a 201 or 409), so its latency numbers mix in failures",
+    "flash-sale/conditional: 145 order or payment requests failed (not a 201 or 202)",
+    "flash-sale/conditional: 189 orders were still unpaid after 30 s (payment webhook did not arrive or was slow)",
+    "flash-sale/conditional: 1206 of 2000 VUs aborted early (failed seat-map reads or repeated hold failures), so the load was lower than configured",
+    "flash-sale/redis: 2890 of 6487 hold requests failed (not a 201 or 409), so its latency numbers mix in failures",
+    "flash-sale/redis: 131 order or payment requests failed (not a 201 or 202)",
+    "flash-sale/redis: 211 orders were still unpaid after 30 s (payment webhook did not arrive or was slow)",
+    "flash-sale/redis: 1484 of 2000 VUs aborted early (failed seat-map reads or repeated hold failures), so the load was lower than configured"
+  ]
+}

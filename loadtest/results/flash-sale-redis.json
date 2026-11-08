@@ -1,0 +1,40 @@
+{
+  "scenario": "flash-sale",
+  "strategy": "redis",
+  "vus": 2000,
+  "durationSec": 123.37,
+  "holds": {
+    "attempts": 6487,
+    "success": 2100,
+    "conflict": 1497,
+    "errors": 2890
+  },
+  "holdLatencyMs": {
+    "p50": 708.4,
+    "p95": 7954.1,
+    "p99": 43790,
+    "max": 60002.6
+  },
+  "httpReqsPerSec": 147.1,
+  "ticketsSold": 3442,
+  "seatsTotal": 10000,
+  "invariants": {
+    "oversoldSeats": 0,
+    "soldSeatsWithoutTicket": 0,
+    "ticketsOnUnsoldSeats": 0,
+    "paidOrdersWithoutTickets": 0,
+    "ticketsWithoutPaidOrder": 0,
+    "paidAmountMismatch": 0,
+    "doublePromisedSeats": 0,
+    "refundedOrders": 0,
+    "pass": true
+  },
+  "orders": {
+    "created": 1814,
+    "paid": 1539,
+    "failed": 0,
+    "errors": 131,
+    "timeouts": 211
+  },
+  "vuAborted": 1484
+}
