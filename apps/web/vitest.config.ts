@@ -11,6 +11,9 @@ export default mergeConfig(
       environment: 'jsdom',
       include: ['test/**/*.test.{ts,tsx}'],
       setupFiles: ['test/setup.ts'],
+      // userEvent-driven page tests take ~1 s each, several times that on a loaded machine; the
+      // 5 s default made them time out there (the API suite already allows 20 s).
+      testTimeout: 20_000,
     },
   }),
 );
