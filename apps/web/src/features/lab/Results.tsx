@@ -1,20 +1,28 @@
 import type { BenchRun, BenchScenario, BenchSummary, Invariants } from '@seatlock/shared';
+import { OctagonX, TriangleAlert } from 'lucide-react';
 import { Badge, Card } from '../../components/ui';
 import { formatDateTime, formatNumber } from '../../lib/format';
 import { BarChart } from './BarChart';
 
 const STRATEGY_ORDER = ['naive', 'pessimistic', 'conditional', 'redis'] as const;
 
-const SCENARIOS: { id: BenchScenario; name: string; blurb: string }[] = [
+/**
+ * Each scenario's throughput is the number it exists to measure. Raw HTTP req/s would reward a
+ * strategy for conflicting more: a flash-sale 409 is retried, and each retry is another request.
+ */
+const SCENARIOS: { id: BenchScenario; name: string; blurb: string; throughput: { title: string; value: (r: BenchRun) => number } }[] = [
   {
     id: 'hot-seat',
     name: 'Hot seat',
     blurb: 'Every user tries to hold the same few seats at the same instant. A safe strategy lets exactly one of them win.',
+    // One hold request per buyer, no retries: how fast the whole crowd got its answer.
+    throughput: { title: 'Buyers answered per second', value: (r) => r.holds.attempts / r.durationSec },
   },
   {
     id: 'flash-sale',
     name: 'Flash sale',
     blurb: 'A crowd buys across the whole venue: pick seats, hold, pay, retry on conflict, until the event sells out or time runs out.',
+    throughput: { title: 'Seats sold per second', value: (r) => r.ticketsSold / r.durationSec },
   },
 ];
 
@@ -45,11 +53,28 @@ function runsFor(summary: BenchSummary, scenario: BenchScenario): BenchRun[] {
     .sort((a, b) => STRATEGY_ORDER.indexOf(a.strategy) - STRATEGY_ORDER.indexOf(b.strategy));
 }
 
-function InvariantCell({ inv }: { inv: Invariants }) {
+/** The problems in the file's verdict that name this run ("hot-seat/conditional: ..."). */
+const problemsOf = (summary: BenchSummary, run: BenchRun) => (summary.problems ?? []).filter((p) => p.startsWith(`${run.scenario}/${run.strategy}:`));
+
+/**
+ * Fail when an invariant broke; Rejected when the file's verdict lists the run (say, a safe
+ * hot-seat run with no winner, whose invariants are trivially clean); naive's clean run is the
+ * Baseline it exists to be, never a green Pass.
+ */
+function badgeFor(run: BenchRun, rejected: boolean): { tone: 'success' | 'danger' | 'neutral'; label: string } {
+  if (!run.invariants.pass) return { tone: 'danger', label: 'Fail' };
+  if (rejected) return { tone: 'danger', label: 'Rejected' };
+  if (run.strategy === 'naive') return { tone: 'neutral', label: 'Baseline' };
+  return { tone: 'success', label: 'Pass' };
+}
+
+function InvariantCell({ run, rejected }: { run: BenchRun; rejected: boolean }) {
+  const inv: Invariants = run.invariants;
   const broken = VIOLATIONS.filter(([key]) => inv[key] !== 0);
+  const badge = badgeFor(run, rejected);
   return (
     <td className="px-3 py-2.5 text-left">
-      <Badge tone={inv.pass ? 'success' : 'danger'}>{inv.pass ? 'Pass' : 'Fail'}</Badge>
+      <Badge tone={badge.tone}>{badge.label}</Badge>
       {broken.length > 0 && (
         <span className="mt-1 block text-xs text-muted">
           {broken.map(([key, words]) => `${formatNumber(inv[key])} ${words}`).join(', ')}
@@ -86,7 +111,9 @@ function ScenarioResults({ summary, scenario }: { summary: BenchSummary; scenari
               <th scope="col" className={`${TH} text-right`}>p50</th>
               <th scope="col" className={`${TH} text-right`}>p95</th>
               <th scope="col" className={`${TH} text-right`}>p99</th>
-              <th scope="col" className={`${TH} text-right`}>Requests</th>
+              <th scope="col" className={`${TH} text-right`} title="Every HTTP request k6 sent, 409 retries and order polls included">
+                HTTP req/s
+              </th>
               <th scope="col" className={`${TH} text-right`}>Sold</th>
               <th scope="col" className={`${TH} text-right`}>Orders paid</th>
               <th scope="col" className={`${TH} text-right`}>VUs aborted</th>
@@ -109,7 +136,7 @@ function ScenarioResults({ summary, scenario }: { summary: BenchSummary; scenari
                 </td>
                 <td className={TD}>{ordersCell(run)}</td>
                 <td className={TD}>{run.vuAborted === undefined ? DASH : formatNumber(run.vuAborted)}</td>
-                <InvariantCell inv={run.invariants} />
+                <InvariantCell run={run} rejected={problemsOf(summary, run).length > 0} />
               </tr>
             ))}
           </tbody>
@@ -118,7 +145,11 @@ function ScenarioResults({ summary, scenario }: { summary: BenchSummary; scenari
 
       <div className="mt-6 grid gap-8 md:grid-cols-2">
         <BarChart title={`p95 hold latency, ${scenario.name.toLowerCase()} (lower is better)`} bars={bars((r) => r.holdLatencyMs.p95)} format={ms} />
-        <BarChart title={`Throughput, ${scenario.name.toLowerCase()} (higher is better)`} bars={bars((r) => r.httpReqsPerSec)} format={perSec} />
+        <BarChart
+          title={`${scenario.throughput.title}, ${scenario.name.toLowerCase()} (higher is better)`}
+          bars={bars(scenario.throughput.value)}
+          format={perSec}
+        />
       </div>
     </section>
   );
@@ -138,8 +169,9 @@ function QueueResults({ queue }: { queue: BenchSummary['queue'] }) {
         Waiting room
       </h3>
       <p className="mt-1 max-w-3xl text-muted">
-        {formatNumber(queue.vus)} users join a queue-enabled sale within seconds and poll until they are let in. Fairness means nobody is
-        admitted ahead of someone who joined earlier.
+        {formatNumber(queue.vus)} users join a queue-enabled sale within seconds, all before it opens, so their places are drawn by
+        lottery when it does; then they poll until they are let in. Fair here means nobody is admitted ahead of someone with an earlier
+        place in that draw. First-come order for people who join after the sale opens is not part of this benchmark.
       </p>
       <dl className="mt-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-5">
         {stats.map(([label, value]) => (
@@ -153,10 +185,48 @@ function QueueResults({ queue }: { queue: BenchSummary['queue'] }) {
   );
 }
 
+/** summarize.mjs's verdict on the file: a red banner if it must not be published, amber cautions otherwise. */
+function Verdict({ summary }: { summary: BenchSummary }) {
+  const problems = summary.problems ?? [];
+  const warnings = summary.warnings ?? [];
+  return (
+    <>
+      {problems.length > 0 && (
+        <div role="alert" className="mb-6 rounded-2xl border border-danger bg-danger/8 p-5">
+          <p className="flex items-center gap-2 font-display text-lg font-bold text-danger">
+            <OctagonX aria-hidden className="size-5" /> Not publishable: these results failed their own checks
+          </p>
+          <ul className="mt-2 list-disc pl-6 text-sm text-ink">
+            {problems.map((p) => (
+              <li key={p}>{p}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {warnings.length > 0 && (
+        <div className="mb-6 rounded-2xl border border-warning bg-warning/8 p-5">
+          <p className="flex items-center gap-2 font-display text-lg font-bold text-warning">
+            <TriangleAlert aria-hidden className="size-5" /> Warnings
+          </p>
+          <ul className="mt-2 list-disc pl-6 text-sm text-ink">
+            {warnings.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {summary.problems === undefined && (
+        <p className="mb-6 text-sm text-muted">This results file predates the publishability check, so it carries no verdict.</p>
+      )}
+    </>
+  );
+}
+
 export function Results({ summary }: { summary: BenchSummary }) {
   const { machine } = summary;
   return (
     <div>
+      <Verdict summary={summary} />
       <p className="max-w-3xl text-muted">
         Every number below was measured by k6 against the real stack and read from a committed file, then each run was checked against
         database invariants: no seat sold twice, every paid order has its tickets, every ticket belongs to a paid order.

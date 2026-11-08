@@ -104,5 +104,11 @@ describe('BenchSummarySchema', () => {
       queue: { vus: 3000, joinP95Ms: 5, pollP95Ms: 6, admitRatePerSec: 200, outOfOrderAdmissions: 0, admittedTotal: 3000 },
     };
     expect(BenchSummarySchema.safeParse(summary).success).toBe(true);
+    // The verdict fields are optional, so a file written before they existed still parses...
+    expect(BenchSummarySchema.parse(summary).problems).toBeUndefined();
+    // ...and summarize.mjs now writes them.
+    const judged = BenchSummarySchema.parse({ ...summary, problems: ['hot-seat/conditional: 0 holds succeeded'], warnings: [] });
+    expect(judged).toMatchObject({ problems: ['hot-seat/conditional: 0 holds succeeded'], warnings: [] });
+    expect(BenchSummarySchema.safeParse({ ...summary, problems: [3] }).success).toBe(false);
   });
 });

@@ -8,8 +8,10 @@
 // `run` and `queue` read loadtest/results/raw/ (k6 --summary-export, bench:verify output, per-VU
 // queue lines) and write results/<scenario>-<strategy>.json or results/queue.json. `summary` reads
 // those and writes results/summary.json and results/SUMMARY.md. Set RESULTS_DIR to use another folder.
-// `summary` exits with status 2 after writing its files if a safe strategy broke an invariant or
-// the results are otherwise not trustworthy, so a bad run can never pass for a good one.
+// `summary` records its verdict in summary.json itself (`problems`, `warnings`), so the Lab page
+// shows a rejected file as "Not publishable", and it exits with status 2 after writing its files
+// if a safe strategy broke an invariant or the results are otherwise not trustworthy. A bad run
+// can never pass for a good one, in the terminal or on the page.
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -326,8 +328,14 @@ export function renderMarkdown(summary, problems, warnings, observedRate) {
   return lines.join('\n');
 }
 
-export function buildSummary({ runs, queue, machine }) {
-  return BenchSummarySchema.parse({ generatedAt: new Date().toISOString(), machine, runs, queue });
+/**
+ * summary.json: the runs, the queue result and the machine, plus the verdict on them, so the
+ * Lab page (which reads only this file) can tell a rejected run from a good one.
+ */
+export function buildSummary({ runs, queue, machine, queueProblems = [] }) {
+  const base = { generatedAt: new Date().toISOString(), machine, runs, queue };
+  const problems = [...findProblems(base), ...queueProblems.map((p) => `queue: ${p}`)];
+  return BenchSummarySchema.parse({ ...base, problems, warnings: findWarnings(base) });
 }
 
 // ---------------------------------------------------------------- CLI
@@ -372,10 +380,8 @@ function cmdSummary() {
     }
   }
   const { observedAdmitRatePerSec, problems: queueProblems = [], ...queue } = readJson(path.join(resultsDir(), 'queue.json'));
-  const summary = buildSummary({ runs, queue: BenchQueueSchema.parse(queue), machine: describeMachine() });
-
-  const problems = [...findProblems(summary), ...queueProblems.map((p) => `queue: ${p}`)];
-  const warnings = findWarnings(summary);
+  const summary = buildSummary({ runs, queue: BenchQueueSchema.parse(queue), machine: describeMachine(), queueProblems });
+  const { problems, warnings } = summary;
   writeJson(path.join(resultsDir(), 'summary.json'), summary);
   writeFileSync(path.join(resultsDir(), 'SUMMARY.md'), renderMarkdown(summary, problems, warnings, observedAdmitRatePerSec));
 

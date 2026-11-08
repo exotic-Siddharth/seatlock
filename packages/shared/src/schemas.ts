@@ -474,5 +474,13 @@ export const BenchSummarySchema = z.object({
   machine: BenchMachineSchema,
   runs: z.array(BenchRunSchema),
   queue: BenchQueueSchema,
+  /**
+   * summarize.mjs's verdict. Each problem means the numbers must not be published (a safe
+   * strategy broke an invariant, a run is missing, ...); run-specific ones start with
+   * "scenario/strategy:". Warnings do not invalidate a run but must be read with it. Absent in
+   * files written before the verdict was recorded.
+   */
+  problems: z.array(z.string()).optional(),
+  warnings: z.array(z.string()).optional(),
 });
 export type BenchSummary = z.infer<typeof BenchSummarySchema>;

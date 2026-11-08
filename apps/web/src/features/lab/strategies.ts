@@ -81,7 +81,7 @@ COMMIT;`,
   },
   {
     name: 'redis',
-    tagline: 'Reject the losers in Redis, before they reach Postgres. Postgres still has the last word.',
+    tagline: 'Reject the losers in Redis, before they open a Postgres transaction. Postgres still has the last word.',
     language: 'sql + lua',
     sql: `-- Lua, atomic in Redis. KEYS = sl:seat:{event}:{seat} for each seat
 for each key: if EXISTS(key) then return "taken" end
@@ -95,7 +95,8 @@ UPDATE event_seats
  WHERE event_id = $e AND id = ANY($ids) AND $avail
 RETURNING id;
 -- app: if that fails, release the Redis keys, report "taken"`,
-    pros: ['Contenders lose fast, in memory, without touching the database.', 'Postgres still verifies every winner, so a Redis mistake cannot sell a seat twice.'],
+    pros: [
+      'Contenders lose fast, in memory: one indexed read of their own hold, then no Postgres transaction or row lock.', 'Postgres still verifies every winner, so a Redis mistake cannot sell a seat twice.'],
     cons: ['Two systems to keep in step: expiries and releases must compare-and-delete the right keys.', 'Adds a Redis round trip for winners, who also pay the Postgres cost.'],
   },
 ];
