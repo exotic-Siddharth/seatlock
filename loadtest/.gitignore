@@ -1,4 +1,8 @@
-# Raw k6 exports, logs and verify output of a run: reproducible, large, not committed.
-results/raw/
+# A run's raw output: the small k6 --summary-export files and bench:verify outputs are committed,
+# so every number in summary.json traces back to them; the k6 console logs and the per-VU queue
+# lines are large and stay out.
+results/raw/*
+!results/raw/*.k6.json
+!results/raw/*.verify.json
 # Smoke runs (run-bench.sh --quick) are never the published numbers.
 results-quick/

@@ -19,6 +19,7 @@ type Summarize = {
   };
   findProblems(summary: unknown): string[];
   findWarnings(summary: unknown): string[];
+  logLevelNote(level: string | undefined): string;
   buildSummary(input: { runs: unknown[]; queue: unknown; machine: unknown; queueProblems?: string[] }): {
     runs: unknown[];
     problems?: string[];
@@ -26,7 +27,7 @@ type Summarize = {
   };
 };
 const specifier = new URL('../../../../loadtest/summarize.mjs', import.meta.url).href;
-const { parseVuLines, checkAdmissionOrder, buildRun, findProblems, findWarnings, buildSummary } = (await import(
+const { parseVuLines, checkAdmissionOrder, buildRun, findProblems, findWarnings, buildSummary, logLevelNote } = (await import(
   /* @vite-ignore */ specifier
 )) as Summarize;
 
@@ -210,5 +211,13 @@ describe('findProblems', () => {
     const noisy = complete(run('flash-sale', 'conditional', { holds: { attempts: 100, success: 90, conflict: 6, errors: 4 } }));
     expect(findProblems(noisy)).toEqual([]);
     expect(findWarnings(noisy)).toEqual([expect.stringMatching(/flash-sale\/conditional: 4 of 100 hold requests failed/)]);
+  });
+});
+
+describe('logLevelNote (machine notes)', () => {
+  it('records the API log level the bench ran with, and whether requests were logged', () => {
+    expect(logLevelNote('warn')).toBe('the API replicas ran with LOG_LEVEL=warn, so per-request logging was off');
+    expect(logLevelNote('info')).toBe('the API replicas ran with LOG_LEVEL=info, logging every request');
+    expect(logLevelNote(undefined)).toBe('');
   });
 });

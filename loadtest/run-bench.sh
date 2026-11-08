@@ -3,13 +3,14 @@
 #
 #   bash loadtest/run-bench.sh            full run:  1,000 / 2,000 / 3,000 VUs, flash sale up to 120 s   -> loadtest/results/
 #   bash loadtest/run-bench.sh --quick    smoke run: 200 VUs everywhere, flash sale up to 30 s           -> loadtest/results-quick/
-#   bash loadtest/run-bench.sh --down     stop the stack when finished (default: leave it running)
+#   bash loadtest/run-bench.sh --keep     afterwards, leave the stack running, switched back to BENCH_MODE=0
 #
 # For every scenario (hot-seat, flash-sale) and strategy (naive, pessimistic, conditional, redis) it resets the
 # bench event, runs k6, waits for in-flight payments to settle, checks the invariants in Postgres and saves
 # results/<scenario>-<strategy>.json. Then it runs the waiting-room scenario and writes summary.json and
 # SUMMARY.md. Exit status 2 means the results were written but are NOT trustworthy (a safe strategy broke an
-# invariant, a run is missing, ...): do not publish them.
+# invariant, a run is missing, ...): do not publish them. When it ends, however it ends, the stack goes down,
+# so it never stays up in BENCH_MODE (rate limits off, naive allowed, thousands of bench sessions live).
 #
 # Set BENCH_NOTES="..." to record anything else that was loading the machine (it goes into summary.json).
 # Needs: Docker, and `npm ci` once (for tsx, which runs summarize.mjs).
@@ -21,12 +22,13 @@ export MSYS_NO_PATHCONV=1
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 QUICK=0
-DOWN=0
+KEEP=0
 for arg in "$@"; do
   case "$arg" in
     --quick) QUICK=1 ;;
-    --down) DOWN=1 ;;
-    -h | --help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --keep) KEEP=1 ;;
+    --down) ;; # the default now; accepted so older instructions still work
+    -h | --help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $arg (try --help)" >&2; exit 64 ;;
   esac
 done
@@ -53,17 +55,43 @@ tool() { local script=$1; shift; dc --profile stack --profile bench run --rm -T 
 k6() { dc --profile stack --profile bench run --rm -T k6 run --quiet "$@"; }
 step() { printf '\n==== %s\n' "$*"; }
 
-trap 'echo "run-bench.sh failed near line $LINENO; the stack is left running for inspection (docker compose -f docker-compose.yml -f docker-compose.stack.yml --profile stack logs)" >&2' ERR
+trap 'echo "run-bench.sh failed near line $LINENO (rerun with --keep to inspect the stack afterwards)" >&2' ERR
+
+# Runs on every exit, success or failure: the stack never stays in bench mode.
+finish() {
+  local code=$?
+  trap - EXIT ERR
+  set +e
+  if [ "$KEEP" = 1 ]; then
+    step "Leaving the stack running, out of bench mode (BENCH_MODE=0, rate limits on, LOG_LEVEL=info)"
+    BENCH_MODE=0 LOG_LEVEL=info dc --profile stack up -d --wait --wait-timeout 300
+    # nginx resolves the API replicas when it starts, so it must restart after they were recreated.
+    dc restart web >/dev/null
+    if [ "$(dc exec -T api printenv BENCH_MODE | tr -d '\r')" = 0 ]; then
+      echo "Stack at http://localhost:8088 with BENCH_MODE=0. Stop it with:"
+      echo "  docker compose -f docker-compose.yml -f docker-compose.stack.yml --profile stack --profile bench down"
+    else
+      echo "could not switch the API out of bench mode: stopping the stack" >&2
+      dc --profile stack --profile bench down
+    fi
+  else
+    step "Stopping the stack"
+    dc --profile stack --profile bench down
+  fi
+  exit "$code"
+}
+trap finish EXIT
 
 rm -rf "$RESULTS_DIR"
 mkdir -p "$RAW"
 chmod a+rwx "$RAW" 2>/dev/null || true # k6 runs as another user inside its container
 
-step "Starting the stack (BENCH_MODE=1)"
-export BENCH_MODE=1
+# Request logging at info costs the replicas real CPU at 2,000 VUs, so the bench runs at warn.
+step "Starting the stack (BENCH_MODE=1, LOG_LEVEL=warn)"
+export BENCH_MODE=1 LOG_LEVEL=warn
 dc --profile stack up -d --build --wait --wait-timeout 300
-if [ "$(dc exec -T api printenv BENCH_MODE | tr -d '\r')" != 1 ]; then
-  echo "the API replicas are not running with BENCH_MODE=1" >&2
+if [ "$(dc exec -T api printenv BENCH_MODE LOG_LEVEL | tr -d '\r' | paste -sd ' ' -)" != "1 warn" ]; then
+  echo "the API replicas are not running with BENCH_MODE=1 and LOG_LEVEL=warn" >&2
   exit 1
 fi
 
@@ -108,14 +136,6 @@ step "Summary"
 status=0
 npx --no-install tsx loadtest/summarize.mjs summary || status=$?
 
-if [ "$DOWN" = 1 ]; then
-  step "Stopping the stack"
-  dc --profile stack --profile bench down
-else
-  echo
-  echo "Stack still running at http://localhost:8088. Stop it with:"
-  echo "  docker compose -f docker-compose.yml -f docker-compose.stack.yml --profile stack --profile bench down"
-fi
 echo
-echo "Results: $RESULTS_DIR/summary.json and $RESULTS_DIR/SUMMARY.md"
+echo "Results: $RESULTS_DIR/summary.json and $RESULTS_DIR/SUMMARY.md (raw k6 exports and verify output in $RAW)"
 exit "$status"
