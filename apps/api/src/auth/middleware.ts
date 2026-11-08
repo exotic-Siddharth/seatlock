@@ -42,13 +42,21 @@ export function currentUser(req: Request): SessionUser {
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 /**
- * CSRF defence: a mutation authenticated by cookie must come from WEB_ORIGIN. Bearer
- * requests are exempt, since a browser never attaches that header on its own.
+ * CSRF defence for every mutation (any method but GET, HEAD and OPTIONS):
+ * - bearer requests are exempt, since a browser never attaches that header on its own;
+ * - a cookie-authenticated one must send an Origin equal to WEB_ORIGIN;
+ * - an anonymous one is refused if it sends any other Origin ("null" included), so another
+ *   site cannot sign a visitor in (login CSRF on /api/auth/demo) or out. Without an Origin it
+ *   passes: browsers send one with every cross-site POST, and scripts and curl do not.
  */
 export function csrfGuard(config: Pick<Config, 'webOrigin'>): RequestHandler {
   return (req, _res, next) => {
-    if (req.authVia === 'cookie' && !SAFE_METHODS.has(req.method) && req.get('origin') !== config.webOrigin) {
-      throw new AppError('CSRF_FAILED', 'Cross-site request blocked');
+    if (req.authVia !== 'bearer' && !SAFE_METHODS.has(req.method)) {
+      const origin = req.get('origin');
+      const foreign = origin !== undefined && origin !== config.webOrigin;
+      if (foreign || (req.authVia === 'cookie' && origin === undefined)) {
+        throw new AppError('CSRF_FAILED', 'Cross-site request blocked');
+      }
     }
     next();
   };
