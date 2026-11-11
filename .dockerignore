@@ -1,0 +1,19 @@
+# Keep the build context small and stop host build output or secrets leaking into images.
+.git
+**/node_modules
+**/dist
+**/coverage
+.env
+.env.*
+!.env.example
+.superpowers
+docs
+# The web image bundles loadtest/results/summary.json for the Lab page; the raw run output and
+# smoke runs stay out.
+loadtest/results/raw
+loadtest/results-quick
+loadtest/.tokens.json
+apps/web/e2e
+apps/web/playwright-report
+apps/web/test-results
+**/*.log

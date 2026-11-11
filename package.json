@@ -1,0 +1,34 @@
+{
+  "name": "seatlock",
+  "private": true,
+  "type": "module",
+  "description": "High-concurrency ticket booking: live seat maps, expiring holds, a fair waiting room and four benchmarked seat-locking strategies.",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c blue,magenta \"npm run dev -w @seatlock/api\" \"npm run dev -w @seatlock/web\"",
+    "build": "npm run build -w @seatlock/api -w @seatlock/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm test --workspaces --if-present",
+    "lint": "eslint .",
+    "db:migrate": "npm run db:migrate -w @seatlock/api",
+    "seed": "npm run seed -w @seatlock/api",
+    "test:e2e": "npm run e2e -w @seatlock/web"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "concurrently": "^10.0.7",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.14.0",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.72.1",
+    "vite": "^6.4.5",
+    "zod": "^3.25.76"
+  }
+}

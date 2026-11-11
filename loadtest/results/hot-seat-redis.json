@@ -1,0 +1,40 @@
+{
+  "scenario": "hot-seat",
+  "strategy": "redis",
+  "vus": 1000,
+  "durationSec": 6.5,
+  "holds": {
+    "attempts": 1000,
+    "success": 1,
+    "conflict": 999,
+    "errors": 0
+  },
+  "holdLatencyMs": {
+    "p50": 2566.9,
+    "p95": 5333.8,
+    "p99": 5866.3,
+    "max": 5951.2
+  },
+  "httpReqsPerSec": 154.1,
+  "ticketsSold": 0,
+  "seatsTotal": 10000,
+  "invariants": {
+    "oversoldSeats": 0,
+    "soldSeatsWithoutTicket": 0,
+    "ticketsOnUnsoldSeats": 0,
+    "paidOrdersWithoutTickets": 0,
+    "ticketsWithoutPaidOrder": 0,
+    "paidAmountMismatch": 0,
+    "doublePromisedSeats": 0,
+    "refundedOrders": 0,
+    "pass": true
+  },
+  "orders": {
+    "created": 0,
+    "paid": 0,
+    "failed": 0,
+    "errors": 0,
+    "timeouts": 0
+  },
+  "vuAborted": 0
+}

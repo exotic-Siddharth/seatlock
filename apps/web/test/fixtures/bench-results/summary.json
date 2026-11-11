@@ -1,0 +1,39 @@
+{
+  "generatedAt": "2026-11-08T10:00:00.000Z",
+  "machine": {
+    "cpu": "Glob Fixture CPU",
+    "logicalCores": 8,
+    "ramGb": 32,
+    "dockerCpus": 8,
+    "dockerMemGb": 16,
+    "apiReplicas": 2,
+    "notes": "Fixture for test/w2/labPage.test.tsx, standing in for loadtest/results/summary.json."
+  },
+  "runs": [
+    {
+      "scenario": "hot-seat",
+      "strategy": "conditional",
+      "vus": 1000,
+      "durationSec": 2.5,
+      "holds": { "attempts": 1000, "success": 1, "conflict": 999, "errors": 0 },
+      "holdLatencyMs": { "p50": 40, "p95": 120, "p99": 180, "max": 240 },
+      "httpReqsPerSec": 400,
+      "ticketsSold": 4,
+      "seatsTotal": 10000,
+      "invariants": {
+        "oversoldSeats": 0,
+        "soldSeatsWithoutTicket": 0,
+        "ticketsOnUnsoldSeats": 0,
+        "paidOrdersWithoutTickets": 0,
+        "ticketsWithoutPaidOrder": 0,
+        "paidAmountMismatch": 0,
+        "doublePromisedSeats": 0,
+        "refundedOrders": 0,
+        "pass": true
+      }
+    }
+  ],
+  "queue": { "vus": 3000, "joinP95Ms": 50, "pollP95Ms": 20, "admitRatePerSec": 200, "outOfOrderAdmissions": 0, "admittedTotal": 3000 },
+  "problems": [],
+  "warnings": []
+}

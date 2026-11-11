@@ -1,0 +1,10 @@
+{
+  "vus": 3000,
+  "joinP95Ms": 2959.9,
+  "pollP95Ms": 296.9,
+  "admitRatePerSec": 200,
+  "outOfOrderAdmissions": 0,
+  "admittedTotal": 3000,
+  "observedAdmitRatePerSec": 187.9,
+  "problems": []
+}
