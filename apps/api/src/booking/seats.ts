@@ -77,12 +77,17 @@ export async function stampWon(c: Queryable, holdId: string): Promise<Date> {
  * Marks the hold's seats held without looking at their status. Only safe when the rows are
  * already locked and checked (pessimistic); naive uses it anyway, which is its bug.
  * `held_until` is copied from the hold, so a seat and its hold always expire at the same instant.
+ *
+ * The rows are locked in id order first, like every other seat write. A plain multi-row UPDATE
+ * locks in scan order, and once a row has a newer version that order can differ between two
+ * concurrent writers, which deadlocks (40P01) when many naive writes land on the same seats.
  */
 export async function markSeatsHeld(c: Queryable, hold: HoldRow): Promise<void> {
   await c.query(
-    `UPDATE event_seats
+    `UPDATE event_seats s
         SET status = 'held', hold_id = $1, held_until = (SELECT expires_at FROM holds WHERE id = $1), updated_at = now()
-      WHERE id = ANY($2)`,
+       FROM (SELECT id FROM event_seats WHERE id = ANY($2) ORDER BY id FOR UPDATE) locked
+      WHERE s.id = locked.id`,
     [hold.id, hold.seatIds],
   );
 }
