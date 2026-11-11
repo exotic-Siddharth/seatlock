@@ -1,0 +1,89 @@
+@import 'tailwindcss';
+
+/*
+ * Theme tokens. Components use the Tailwind utilities generated from @theme
+ * (bg-surface, text-ink, border-line, bg-tier-0, ...), which read these variables,
+ * so dark mode is just a second set of values.
+ */
+:root {
+  color-scheme: light dark;
+
+  --bg: #f7f4ee;
+  --surface: #ffffff;
+  --surface-2: #efebe3;
+  --line: #e1dbcf;
+  --ink: #1e1a4f; /* deep indigo */
+  --muted: #5d5a7e;
+  --accent: #cf4410; /* ticket orange, AA with white text */
+  --accent-strong: #b23a0c;
+  --on-accent: #ffffff;
+  --success: #15803d;
+  --warning: #b45309;
+  --danger: #c0262d;
+  --info: #1d4ed8;
+
+  /* Seat map: price tiers, most to least expensive, and taken seats. */
+  --tier-0: #7c3aed;
+  --tier-1: #0d9488;
+  --tier-2: #2563eb;
+  --tier-3: #ca8a04;
+  --seat-off: #cbc7d6;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e0c22;
+    --surface: #17153a;
+    --surface-2: #221f4b;
+    --line: #2f2b5f;
+    --ink: #eceaff;
+    --muted: #a9a6cc;
+    --accent: #ff7a3d;
+    --accent-strong: #ff935f;
+    --on-accent: #1b1036;
+    --success: #4ade80;
+    --warning: #fbbf24;
+    --danger: #f87171;
+    --info: #93c5fd;
+
+    --tier-0: #a78bfa;
+    --tier-1: #2dd4bf;
+    --tier-2: #60a5fa;
+    --tier-3: #facc15;
+    --seat-off: #3d3970;
+  }
+}
+
+@theme inline {
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Space Grotesk Variable', 'Inter Variable', ui-sans-serif, sans-serif;
+
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-on-accent: var(--on-accent);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+  --color-tier-0: var(--tier-0);
+  --color-tier-1: var(--tier-1);
+  --color-tier-2: var(--tier-2);
+  --color-tier-3: var(--tier-3);
+  --color-seat-off: var(--seat-off);
+}
+
+@layer base {
+  body {
+    @apply bg-bg font-sans text-ink antialiased;
+  }
+
+  ::selection {
+    @apply bg-accent text-on-accent;
+  }
+}

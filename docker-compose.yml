@@ -1,0 +1,44 @@
+name: seatlock
+
+# Development infrastructure: Postgres and Redis for `npm run dev` and the tests. The full stack
+# (nginx + 2 API replicas) is docker-compose.stack.yml, a separate Compose project.
+#
+# Host ports are bound to loopback only, on IPv4 and IPv6 ("localhost" may resolve to either):
+# the database password is the dev default and Redis has none, so nobody else on the network
+# may reach them (a writable Redis would let anyone forge an sl:sess:* admin session).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: seatlock
+      POSTGRES_PASSWORD: seatlock
+      POSTGRES_DB: seatlock
+    # Headroom for two API replicas, the dev server and parallel test runs.
+    command: ["postgres", "-c", "max_connections=200"]
+    ports:
+      - "127.0.0.1:55434:5432"
+      - "[::1]:55434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U seatlock -d seatlock"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    # Everything in Redis is rebuildable (sessions, queue, gates), so no persistence.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:56381:6379"
+      - "[::1]:56381:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:

@@ -1,0 +1,40 @@
+{
+  "scenario": "hot-seat",
+  "strategy": "conditional",
+  "vus": 1000,
+  "durationSec": 7.56,
+  "holds": {
+    "attempts": 1000,
+    "success": 1,
+    "conflict": 999,
+    "errors": 0
+  },
+  "holdLatencyMs": {
+    "p50": 4405.7,
+    "p95": 6511.2,
+    "p99": 6820.9,
+    "max": 7259.7
+  },
+  "httpReqsPerSec": 132.5,
+  "ticketsSold": 0,
+  "seatsTotal": 10000,
+  "invariants": {
+    "oversoldSeats": 0,
+    "soldSeatsWithoutTicket": 0,
+    "ticketsOnUnsoldSeats": 0,
+    "paidOrdersWithoutTickets": 0,
+    "ticketsWithoutPaidOrder": 0,
+    "paidAmountMismatch": 0,
+    "doublePromisedSeats": 0,
+    "refundedOrders": 0,
+    "pass": true
+  },
+  "orders": {
+    "created": 0,
+    "paid": 0,
+    "failed": 0,
+    "errors": 0,
+    "timeouts": 0
+  },
+  "vuAborted": 0
+}

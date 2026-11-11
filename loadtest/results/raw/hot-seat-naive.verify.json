@@ -1,0 +1,15 @@
+{
+  "event": "bench-hot",
+  "strategy": "naive",
+  "oversoldSeats": 0,
+  "soldSeatsWithoutTicket": 0,
+  "ticketsOnUnsoldSeats": 0,
+  "paidOrdersWithoutTickets": 0,
+  "ticketsWithoutPaidOrder": 0,
+  "paidAmountMismatch": 0,
+  "doublePromisedSeats": 0,
+  "refundedOrders": 0,
+  "pass": true,
+  "ticketsSold": 0,
+  "seatsTotal": 10000
+}
