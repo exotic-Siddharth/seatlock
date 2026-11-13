@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "description": "High-concurrency ticket booking: live seat maps, expiring holds, a fair waiting room and four benchmarked seat-locking strategies.",
+  "license": "MIT",
   "workspaces": [
     "packages/*",
     "apps/*"

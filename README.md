@@ -136,3 +136,7 @@ docs/            design document, plan, screenshots
 ## Tech
 
 TypeScript, React 19, Vite, Tailwind CSS 4, TanStack Query, Express 5, node-postgres, ioredis, zod, PostgreSQL 16, Redis 7, Docker Compose, nginx, k6, Vitest, Supertest, Playwright, GitHub Actions.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
